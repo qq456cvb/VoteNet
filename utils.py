@@ -8,11 +8,12 @@ import os
 import sys
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(BASE_DIR)
+ROOT_DIR = BASE_DIR
 sys.path.append(os.path.join(ROOT_DIR, 'utils'))
 sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/sampling'))
 sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/grouping'))
 sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/3d_interpolation'))
+# print(os.path.join(ROOT_DIR, 'tf_ops/3d_interpolation'))
 from tf_sampling import farthest_point_sample, gather_point
 from tf_grouping import query_ball_point, group_point, knn_point
 from tf_interpolate import three_nn, three_interpolate
@@ -21,7 +22,7 @@ import tensorflow as tf
 import numpy as np
 
 
-def sample_and_group(npoint, radius, nsample, xyz, points, knn=False, use_xyz=True, group_xyz=None):
+def sample_and_group(npoint, radius, nsample, xyz, points, knn=False, use_xyz=True, sample_xyz=None):
     '''
     Input:
         npoint: int32
@@ -38,8 +39,8 @@ def sample_and_group(npoint, radius, nsample, xyz, points, knn=False, use_xyz=Tr
         grouped_xyz: (batch_size, npoint, nsample, 3) TF tensor, normalized point XYZs
             (subtracted by seed point XYZ) in local regions
     '''
-    if group_xyz:
-        new_xyz = gather_point(group_xyz, farthest_point_sample(npoint, xyz))
+    if sample_xyz is not None:
+        new_xyz = gather_point(xyz, farthest_point_sample(npoint, sample_xyz))
     else:
         new_xyz = gather_point(xyz, farthest_point_sample(npoint, xyz))  # (batch_size, npoint, 3)
     if knn:
@@ -90,7 +91,7 @@ def sample_and_group_all(xyz, points, use_xyz=True):
 
 
 def pointnet_sa_module(xyz, points, npoint, radius, nsample, mlp, mlp2, group_all, scope,
-                       bn=True, pooling='max', knn=False, use_xyz=True, use_nchw=False, group_xyz=None):
+                       bn=True, pooling='max', knn=False, use_xyz=True, use_nchw=False, sample_xyz=None):
     ''' PointNet Set Abstraction (SA) Module
         Input:
             xyz: (batch_size, ndataset, 3) TF tensor
@@ -116,7 +117,7 @@ def pointnet_sa_module(xyz, points, npoint, radius, nsample, mlp, mlp2, group_al
             nsample = xyz.get_shape()[1].value
             new_xyz, new_points, idx, grouped_xyz = sample_and_group_all(xyz, points, use_xyz)
         else:
-            new_xyz, new_points, idx, grouped_xyz = sample_and_group(npoint, radius, nsample, xyz, points, knn, use_xyz, group_xyz)
+            new_xyz, new_points, idx, grouped_xyz = sample_and_group(npoint, radius, nsample, xyz, points, knn, use_xyz, sample_xyz)
 
         # Point Feature Embedding
         if use_nchw: new_points = tf.transpose(new_points, [0, 3, 1, 2])

@@ -6,6 +6,7 @@ sys.path.append(os.path.join(BASE_DIR, '../utils'))
 import tensorflow as tf
 from tensorpack import *
 import numpy as np
+from tensorpack.tfutils import get_current_tower_context, gradproc, optimizer, summary, varreplace
 from utils import pointnet_sa_module, pointnet_fp_module
 import config
 
@@ -13,14 +14,18 @@ import config
 class Model(ModelDesc):
     def inputs(self):
         return [tf.placeholder(tf.float32, [None, config.POINT_NUM , 3], 'points'),
-                tf.placeholder(tf.float32, [None, None, 3], 'bboxes'),
-                tf.placeholder(tf.int32, (None, config.PROPOSAL_NUM), 'objectiveness'),
-                tf.placeholder(tf.int32, (None, config.PROPOSAL_NUM), 'semantic_labels'),
+                tf.placeholder(tf.float32, [None, None, 3], 'bboxes_xyz'),
+                tf.placeholder(tf.float32, [None, None, 3], 'bboxes_lwh'),
+                tf.placeholder(tf.int32, (None, None), 'semantic_labels'),
+                tf.placeholder(tf.int32, (None, None), 'heading_labels'),
+                tf.placeholder(tf.float32, (None, None), 'heading_residuals'),
+                tf.placeholder(tf.int32, (None, None), 'size_labels'),
+                tf.placeholder(tf.float32, (None, None, 3), 'size_residuals'),
                 ]
 
-    def build_graph(self, x, bboxes_gt, obj_gt, sem_gt):
-        l0_xyz = tf.slice(x, [0, 0, 0], [-1, -1, 3])
-        l0_points = tf.slice(x, [0, 0, 3], [-1, -1, 3])
+    def build_graph(self, x, bboxes_xyz, bboxes_lwh, semantic_labels, heading_labels, heading_residuals, size_labels, size_residuals):
+        l0_xyz = x
+        l0_points = x
 
         # Set Abstraction layers
         l1_xyz, l1_points, l1_indices = pointnet_sa_module(l0_xyz, l0_points, npoint=2048, radius=0.2, nsample=64,
@@ -37,101 +42,104 @@ class Model(ModelDesc):
         seeds_xyz = l2_xyz
 
         # Voting Module layers
-        offset = tf.concat([seeds_xyz, seeds_points], 2)
+        offset = tf.reshape(tf.concat([seeds_xyz, seeds_points], 2), [-1, 256 + 3])
         units = [256, 256, 256 + 3]
         for i in range(len(units)):
             offset = FullyConnected('voting%d' % i, offset, units[i], activation=BNReLU if i < len(units) - 1 else None)
+        offset = tf.reshape(offset, [-1, 1024, 256 + 3])
 
         # B * N * 3
-        vote_reg_loss = tf.reduce_mean(tf.norm(offset[:, :, :3] - offset_gt, axis=-1), name='vote_reg_loss')
-        votes = tf.concat([seeds_xyz, seeds_points]) + offset
+        votes = tf.concat([seeds_xyz, seeds_points], 2) + offset
         votes_xyz = votes[:, :, :3]
+        dist2center = tf.abs(tf.expand_dims(seeds_xyz, 2) - tf.expand_dims(bboxes_xyz, 1))
+        surface_ind = tf.less(dist2center, tf.expand_dims(bboxes_lwh, 1) / 2.)  # B * N * BB * 3, bool
+        surface_ind = tf.equal(tf.count_nonzero(surface_ind, -1), 3)  # B * N * BB
+        surface_ind = tf.greater_equal(tf.count_nonzero(surface_ind, -1), 1)  # B * N, should be in at least one bbox
+
+        dist2center_norm = tf.norm(dist2center, axis=-1)  # B * N * BB
+        votes_assignment = tf.argmin(dist2center_norm, -1, output_type=tf.int32)  # B * N, int
+        bboxes_xyz_votes_gt = tf.gather_nd(bboxes_xyz, tf.stack([
+            tf.tile(tf.expand_dims(tf.range(tf.shape(votes_assignment)[0]), -1), [1, tf.shape(votes_assignment)[1]]),
+            votes_assignment], 2))  # B * N * 3
+        vote_reg_loss = tf.reduce_mean(tf.norm(votes_xyz - bboxes_xyz_votes_gt, axis=-1) * tf.cast(surface_ind, tf.float32), name='vote_reg_loss')
         votes_points = votes[:, :, 3:]
 
         # Proposal Module layers
         # Farthest point sampling on seeds
-        proposals_xyz, proposals_output, _ = pointnet_sa_module(seeds_xyz, votes_points, npoint=config.PROPOSAL_NUM,
+
+        proposals_xyz, proposals_output, _ = pointnet_sa_module(votes_xyz, votes_points, npoint=config.PROPOSAL_NUM,
                                                                 radius=0.3, nsample=64, mlp=[128, 128, 128],
                                                                 mlp2=[128, 128, 5+2 * config.NH+4 * config.NS+config.NC],
                                                                 group_all=False, scope='proposal',
-                                                                group_xyz=votes_xyz)
+                                                                sample_xyz=seeds_xyz)
 
         # calculate positive and negative proposal idxes
-        bboxes_xyz_gt = bboxes_gt[:, :, :3]
-        dist_mat = tf.norm(tf.expand_dims(proposals_xyz, 1) - tf.expand_dims(bboxes_xyz_gt, 2), axis=-1)  # B * PR * BB
+        bboxes_xyz_gt = bboxes_xyz  # B * BB * 3
+        bboxes_labels_gt = semantic_labels  # B * BB
+        bboxes_heading_labels_gt = heading_labels
+        bboxes_heading_residuals_gt = heading_residuals
+        bboxes_size_labels_gt = size_labels
+        bboxes_size_residuals_gt = size_residuals
+        dist_mat = tf.norm(tf.expand_dims(proposals_xyz, 2) - tf.expand_dims(bboxes_xyz_gt, 1), axis=-1)  # B * PR * BB
+        bboxes_assignment = tf.argmin(dist_mat, axis=-1)  # B * PR
         min_dist = tf.reduce_min(dist_mat, axis=-1)
 
-        positive_idxes = tf.where(min_dist < config.POSITIVE_THRES)  # N * 2
-        negative_idxes = tf.where(min_dist > config.NEGATIVE_THRES)  # N * 2
+        positive_idxes = tf.where(min_dist < config.POSITIVE_THRES)  # Np * 2
+        negative_idxes = tf.where(min_dist > config.NEGATIVE_THRES)  # Nn * 2
+        positive_gt_idxes = tf.stack([positive_idxes[:, 0], tf.gather_nd(bboxes_assignment, positive_idxes)], axis=1)
 
         # objectiveness loss
         obj_cls_score = proposals_output[..., :2]
-        obj_cls_loss = tf.reduce_mean(
-            tf.nn.sparse_softmax_cross_entropy_with_logits(logits=obj_cls_score, labels=obj_gt), name='obj_cls_loss')
-
-        sem_cls_score = proposals_output[..., -config.NC:]
-
-
-
-        sem_cls_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=sem_cls_score, labels=sem_gt), name='sem_cls_loss')
-
-        obj_correct = tf.cast(tf.nn.in_top_k(obj_cls_score, obj_gt, 1), tf.float32, name='obj_correct')
+        pos_obj_cls_score = tf.gather_nd(obj_cls_score, positive_idxes)
+        pos_obj_cls_gt = tf.ones([tf.shape(positive_idxes)[0]], dtype=tf.int32)
+        neg_obj_cls_score = tf.gather_nd(obj_cls_score, negative_idxes)
+        neg_obj_cls_gt = tf.zeros([tf.shape(negative_idxes)[0]], dtype=tf.int32)
+        obj_cls_loss = tf.identity(tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=pos_obj_cls_score, labels=pos_obj_cls_gt))
+                                   + tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=neg_obj_cls_score, labels=neg_obj_cls_gt)), name='obj_cls_loss')
+        obj_correct = tf.concat([tf.cast(tf.nn.in_top_k(pos_obj_cls_score, pos_obj_cls_gt, 1), tf.float32),
+                                 tf.cast(tf.nn.in_top_k(neg_obj_cls_score, neg_obj_cls_gt, 1), tf.float32)], axis=0, name='obj_correct')
         obj_accuracy = tf.reduce_mean(obj_correct, name='obj_accuracy')
 
-        sem_correct = tf.cast(tf.nn.in_top_k(sem_cls_score, sem_gt, 1), tf.float32, name='sem_correct')
-        sem_accuracy = tf.reduce_mean(sem_correct, name='sem_accuracy')
-
-        # Center regression losses
-        center_dist = tf.norm(center_label - end_points['center'], axis=-1)
-        center_loss = huber_loss(center_dist, delta=2.0)
-        tf.summary.scalar('center loss', center_loss)
-        stage1_center_dist = tf.norm(center_label - \
-                                     end_points['stage1_center'], axis=-1)
-        stage1_center_loss = huber_loss(stage1_center_dist, delta=1.0)
-        tf.summary.scalar('stage1 center loss', stage1_center_loss)
+        # center regression losses
+        center_gt = tf.gather_nd(bboxes_xyz_gt, positive_gt_idxes)
+        delta_predicted = tf.gather_nd(proposals_output[..., 2:5], positive_idxes)
+        delta_gt = center_gt - tf.gather_nd(proposals_xyz, positive_idxes)
+        center_loss = tf.reduce_mean(tf.reduce_sum(tf.losses.huber_loss(labels=delta_gt, predictions=delta_predicted, reduction=tf.losses.Reduction.NONE), axis=-1))
 
         # Heading loss
-        heading_class_loss = tf.reduce_mean( \
-            tf.nn.sparse_softmax_cross_entropy_with_logits( \
-                logits=end_points['heading_scores'], labels=heading_class_label))
-        tf.summary.scalar('heading class loss', heading_class_loss)
+        heading_cls_gt = tf.gather_nd(bboxes_heading_labels_gt, positive_gt_idxes)
+        heading_cls_score = tf.gather_nd(proposals_output[..., 5:5+config.NH], positive_idxes)
+        heading_cls_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=heading_cls_score, labels=heading_cls_gt))
 
-        hcls_onehot = tf.one_hot(heading_class_label,
-                                 depth=NUM_HEADING_BIN,
-                                 on_value=1, off_value=0, axis=-1)  # BxNUM_HEADING_BIN
-        heading_residual_normalized_label = \
-            heading_residual_label / (np.pi / NUM_HEADING_BIN)
-        heading_residual_normalized_loss = huber_loss(tf.reduce_sum( \
-            end_points['heading_residuals_normalized'] * tf.to_float(hcls_onehot), axis=1) - \
-                                                      heading_residual_normalized_label, delta=1.0)
-        tf.summary.scalar('heading residual normalized loss',
-                          heading_residual_normalized_loss)
+        heading_cls_gt_onehot = tf.one_hot(heading_cls_gt,  depth=config.NH, on_value=1, off_value=0, axis=-1)  # Np * NH
+        heading_residual_gt = tf.gather_nd(bboxes_heading_residuals_gt, positive_gt_idxes)  # Np
+        heading_residual_predicted = tf.gather_nd(proposals_output[..., 5 + config.NH:5+2 * config.NH], positive_idxes)  # Np * NH
+        heading_residual_loss = tf.losses.huber_loss(labels=heading_residual_gt,
+                                                     predictions=tf.reduce_sum(heading_residual_predicted * tf.to_float(heading_cls_gt_onehot), axis=1), reduction=tf.losses.Reduction.MEAN)
 
         # Size loss
-        size_class_loss = tf.reduce_mean( \
-            tf.nn.sparse_softmax_cross_entropy_with_logits( \
-                logits=end_points['size_scores'], labels=size_class_label))
-        tf.summary.scalar('size class loss', size_class_loss)
+        size_cls_gt = tf.gather_nd(bboxes_size_labels_gt, positive_gt_idxes)
+        size_cls_score = tf.gather_nd(proposals_output[..., 5+2 * config.NH:5+2 * config.NH + config.NS], positive_idxes)
+        size_cls_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=size_cls_score, labels=size_cls_gt))
 
-        scls_onehot = tf.one_hot(size_class_label,
-                                 depth=NUM_SIZE_CLUSTER,
-                                 on_value=1, off_value=0, axis=-1)  # BxNUM_SIZE_CLUSTER
-        scls_onehot_tiled = tf.tile(tf.expand_dims( \
-            tf.to_float(scls_onehot), -1), [1, 1, 3])  # BxNUM_SIZE_CLUSTERx3
-        predicted_size_residual_normalized = tf.reduce_sum( \
-            end_points['size_residuals_normalized'] * scls_onehot_tiled, axis=[1])  # Bx3
+        size_cls_gt_onehot = tf.one_hot(size_cls_gt, depth=config.NS, on_value=1, off_value=0, axis=-1)  # Np * NS
+        size_cls_gt_onehot = tf.tile(tf.expand_dims(tf.to_float(size_cls_gt_onehot), -1), [1, 1, 3])  # Np * NS * 3
+        size_residual_gt = tf.gather_nd(bboxes_size_residuals_gt, positive_gt_idxes)  # Np * 3
+        size_residual_predicted = tf.reshape(tf.gather_nd(proposals_output[..., 5+2 * config.NH + config.NS:5+2 * config.NH + 4 * config.NS], positive_idxes), (-1, config.NS, 3))  # Np * NS * 3
 
-        mean_size_arr_expand = tf.expand_dims( \
-            tf.constant(g_mean_size_arr, dtype=tf.float32), 0)  # 1xNUM_SIZE_CLUSTERx3
-        mean_size_label = tf.reduce_sum( \
-            scls_onehot_tiled * mean_size_arr_expand, axis=[1])  # Bx3
-        size_residual_label_normalized = size_residual_label / mean_size_label
-        size_normalized_dist = tf.norm( \
-            size_residual_label_normalized - predicted_size_residual_normalized,
-            axis=-1)
-        size_residual_normalized_loss = huber_loss(size_normalized_dist, delta=1.0)
-        tf.summary.scalar('size residual normalized loss',
-                          size_residual_normalized_loss)
+        size_residual_loss = tf.reduce_mean(tf.reduce_sum(tf.losses.huber_loss(labels=size_residual_gt,
+                                                                               predictions=tf.reduce_sum(size_residual_predicted * tf.to_float(size_cls_gt_onehot), axis=1), reduction=tf.losses.Reduction.NONE), axis=-1))
+
+        box_loss = center_loss + 0.1 * heading_cls_loss + heading_residual_loss + 0.1 * size_cls_loss + size_residual_loss
+
+        # semantic loss
+        sem_cls_score = tf.gather_nd(proposals_output[..., -config.NC:], positive_idxes)
+        sem_cls_gt = tf.gather_nd(bboxes_labels_gt, positive_gt_idxes)  # Np
+        sem_cls_loss = tf.reduce_mean(
+            tf.nn.sparse_softmax_cross_entropy_with_logits(logits=sem_cls_score, labels=sem_cls_gt),
+            name='sem_cls_loss')
+        sem_correct = tf.cast(tf.nn.in_top_k(sem_cls_score, sem_cls_gt, 1), tf.float32, name='sem_correct')
+        sem_accuracy = tf.reduce_mean(sem_correct, name='sem_accuracy')
 
         # This will monitor training error & accuracy (in a moving average fashion). The value will be automatically
         # 1. written to tensosrboard
@@ -142,11 +150,13 @@ class Model(ModelDesc):
         # Use a regex to find parameters to apply weight decay.
         # Here we apply a weight decay on all W (weight matrix) of all fc layers
         # If you don't like regex, you can certainly define the cost in any other methods.
-        wd_cost = tf.multiply(1e-5,
-                              regularize_cost('.*/W', tf.nn.l2_loss),
-                              name='regularize_loss')
-        total_cost = tf.add_n([cost, wd_cost], name='total_cost')
-        summary.add_moving_summary(cost, wd_cost, total_cost)
+        # no weight decay
+        # wd_cost = tf.multiply(1e-5,
+        #                       regularize_cost('.*/W', tf.nn.l2_loss),
+        #                       name='regularize_loss')
+        total_cost = vote_reg_loss + 0.5 * obj_cls_loss + 1. * box_loss + 0.1 * sem_cls_loss
+        total_cost = tf.identity(total_cost, name='total_cost')
+        summary.add_moving_summary(total_cost)
 
         # monitor histogram of all weight (of conv and fc layers) in tensorboard
         summary.add_param_summary(('.*/W', ['histogram', 'rms']))
@@ -167,7 +177,4 @@ class Model(ModelDesc):
 
 
 if __name__=='__main__':
-    with tf.Graph().as_default():
-        inputs = tf.zeros((32,2048,6))
-        net, _ = get_model(inputs, tf.constant(True))
-        print(net)
+   pass
