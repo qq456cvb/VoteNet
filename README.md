@@ -6,5 +6,6 @@ This is an unofficial implementation of "Deep Hough Voting for 3D Object Detecti
 * Pass the root folder of generated data in `MyDataFlow` and run `run.py`.
 
 # TODOs
-* Data augmentation
+* ~~Data augmentation~~
 * Test/Validation mAP
+* 3D NMS

@@ -402,7 +402,8 @@ class MyDataFlow(RNGDataFlow):
     def __iter__(self):
         while True:
             try:
-                idx = self.rng.randint(len(self))
+                # idx = self.rng.randint(len(self))
+                idx = 10
                 calib = self.dataset.get_calibration(idx)
                 objects = self.dataset.get_label_objects(idx)
                 pc_upright_depth = self.dataset.get_depth(idx)
@@ -415,6 +416,19 @@ class MyDataFlow(RNGDataFlow):
 
                 if not objects:
                     continue
+
+                if np.random.rand() > 0.5:
+                    flip_x = True
+                else:
+                    flip_x = False
+
+                if np.random.rand() > 0.5:
+                    flip_z = True
+                else:
+                    flip_z = False
+
+                rand_roty_angle = (np.random.rand() * 2 - 1.) * 5. / 180 * np.pi
+                rand_scale = (np.random.rand() * 2 - 1.) * 0.1 + 1.
 
                 bboxes_xyz = []
                 bboxes_lwh = []
@@ -443,12 +457,21 @@ class MyDataFlow(RNGDataFlow):
                     box3d_size = np.array([2 * obj.l, 2 * obj.w, 2 * obj.h])
                     box3d_center = (box3d_pts_3d[0, :] + box3d_pts_3d[6, :]) / 2
 
+                    if flip_x:
+                        box3d_center[..., 0] = -box3d_center[..., 0]
+                        obj.heading_angle = np.pi - obj.heading_angle
+                    if flip_z:
+                        box3d_center[..., 2] = -box3d_center[..., 2]
+                        obj.heading_angle = -obj.heading_angle
+
+                    box3d_center = (roty(rand_roty_angle) @ box3d_center.T).T
+                    obj.heading_angle += rand_roty_angle
+
+                    box3d_center = box3d_center * rand_scale
+                    box3d_size = box3d_size * rand_scale
 
                     # Size
                     size_class, size_residual = size2class(box3d_size, obj.classname)
-
-                    # Data Augmentation: TODO
-
                     angle_class, angle_residual = angle2class(obj.heading_angle, config.NH)
 
                     # Reject object with too few points
@@ -471,6 +494,13 @@ class MyDataFlow(RNGDataFlow):
                     size_residuals.append(size_residual / type_mean_size[obj.classname])
 
                 if len(bboxes_xyz) > 0:
+                    if flip_x:
+                        pc_upright_camera[..., 0] = -pc_upright_camera[..., 0]
+                    if flip_z:
+                        pc_upright_camera[..., 2] = -pc_upright_camera[..., 2]
+                    pc_upright_camera[:, :3] = (roty(rand_roty_angle) @ pc_upright_camera[:, :3].T).T
+                    pc_upright_camera[:, :3] = pc_upright_camera[:, :3] * rand_scale
+
                     yield [pc_upright_camera[:, :3], np.array(bboxes_xyz), np.array(bboxes_lwh), np.array(semantic_labels),
                            np.array(heading_labels), np.array(heading_residuals), np.array(size_labels), np.array(size_residuals)]
             except Exception as ex:
@@ -518,7 +548,7 @@ if __name__ == '__main__':
         from viz_utils import draw_lidar, draw_gt_boxes3d
 
         median_list = []
-        dataset = MyDataFlow('/media/neil/DATA/mysunrgbd', 'training')
+        dataset = MyDataFlow('D:\\mysunrgbd', 'training')
         dataset.reset_state()
         # print(type(dataset.input_list[0][0, 0]))
         # print(dataset.input_list[0].shape)
@@ -537,14 +567,14 @@ if __name__ == '__main__':
                 # print dataset.id_list[i]
                 # print from_prediction_to_label_format(data[2], data[3], data[4], data[5], data[6], rot_angle)
 
-                # ps = obj[0]
-                # fig = mlab.figure(figure=None, bgcolor=(0.4, 0.4, 0.4), fgcolor=None, engine=None, size=(1000, 500))
-                # mlab.points3d(ps[:, 0], ps[:, 1], ps[:, 2], mode='point', colormap='gnuplot', scale_factor=1,
-                #               figure=fig)
-                # mlab.points3d(0, 0, 0, color=(1, 1, 1), mode='sphere', scale_factor=0.2, figure=fig)
-                # # draw_gt_boxes3d([dataset.get_center_view_box3d(i)], fig)
-                # draw_gt_boxes3d([box3d_from_label], fig, color=(1, 0, 0))
-                # mlab.orientation_axes()
-                # print(ps[0:10, :])
-                # mlab.show()
+                ps = obj[0]
+                fig = mlab.figure(figure=None, bgcolor=(0.4, 0.4, 0.4), fgcolor=None, engine=None, size=(1000, 500))
+                mlab.points3d(ps[:, 0], ps[:, 1], ps[:, 2], mode='point', colormap='gnuplot', scale_factor=1,
+                              figure=fig)
+                mlab.points3d(0, 0, 0, color=(1, 1, 1), mode='sphere', scale_factor=0.2, figure=fig)
+                # draw_gt_boxes3d([dataset.get_center_view_box3d(i)], fig)
+                draw_gt_boxes3d([box3d_from_label], fig, color=(1, 0, 0))
+                mlab.orientation_axes()
+                print(ps[0:10, :])
+                mlab.show()
     # extract_roi_seg_from_rgb_detection('FPN_384x384', 'training', 'fcn_det_val.zip.pickle', valid_id_list=[int(line.rstrip()) for line in open('/home/rqi/Data/mysunrgbd/training/val_data_idx.txt')], viz=True)
