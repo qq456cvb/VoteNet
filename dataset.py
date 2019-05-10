@@ -41,6 +41,10 @@ type_mean_size = {'bathtub': np.array([0.765840, 1.398258, 0.472728]),
                   'table': np.array([0.791118, 1.279516, 0.718182]),
                   'toilet': np.array([0.699104, 0.454178, 0.756250])}
 
+class_mean_size = np.zeros((len(type2class), 3), dtype=np.float32)
+for t, idx in type2class.items():
+    class_mean_size[idx] = type_mean_size[t]
+
 
 def rotate_pc_along_y(pc, rot_angle):
     ''' Input ps is NxC points with first 3 channels as XYZ
@@ -402,8 +406,8 @@ class MyDataFlow(RNGDataFlow):
     def __iter__(self):
         while True:
             try:
-                # idx = self.rng.randint(len(self))
-                idx = 10
+                idx = self.rng.randint(len(self))
+                # idx = 10
                 calib = self.dataset.get_calibration(idx)
                 objects = self.dataset.get_label_objects(idx)
                 pc_upright_depth = self.dataset.get_depth(idx)
@@ -417,18 +421,19 @@ class MyDataFlow(RNGDataFlow):
                 if not objects:
                     continue
 
-                if np.random.rand() > 0.5:
-                    flip_x = True
-                else:
-                    flip_x = False
+                if self.training:
+                    if np.random.rand() > 0.5:
+                        flip_x = True
+                    else:
+                        flip_x = False
 
-                if np.random.rand() > 0.5:
-                    flip_z = True
-                else:
-                    flip_z = False
+                    if np.random.rand() > 0.5:
+                        flip_z = True
+                    else:
+                        flip_z = False
 
-                rand_roty_angle = (np.random.rand() * 2 - 1.) * 5. / 180 * np.pi
-                rand_scale = (np.random.rand() * 2 - 1.) * 0.1 + 1.
+                    rand_roty_angle = (np.random.rand() * 2 - 1.) * 5. / 180 * np.pi
+                    rand_scale = (np.random.rand() * 2 - 1.) * 0.1 + 1.
 
                 bboxes_xyz = []
                 bboxes_lwh = []
@@ -457,18 +462,19 @@ class MyDataFlow(RNGDataFlow):
                     box3d_size = np.array([2 * obj.l, 2 * obj.w, 2 * obj.h])
                     box3d_center = (box3d_pts_3d[0, :] + box3d_pts_3d[6, :]) / 2
 
-                    if flip_x:
-                        box3d_center[..., 0] = -box3d_center[..., 0]
-                        obj.heading_angle = np.pi - obj.heading_angle
-                    if flip_z:
-                        box3d_center[..., 2] = -box3d_center[..., 2]
-                        obj.heading_angle = -obj.heading_angle
+                    if self.training:
+                        if flip_x:
+                            box3d_center[..., 0] = -box3d_center[..., 0]
+                            obj.heading_angle = np.pi - obj.heading_angle
+                        if flip_z:
+                            box3d_center[..., 2] = -box3d_center[..., 2]
+                            obj.heading_angle = -obj.heading_angle
 
-                    box3d_center = (roty(rand_roty_angle) @ box3d_center.T).T
-                    obj.heading_angle += rand_roty_angle
+                        box3d_center = (roty(rand_roty_angle) @ box3d_center.T).T
+                        obj.heading_angle += rand_roty_angle
 
-                    box3d_center = box3d_center * rand_scale
-                    box3d_size = box3d_size * rand_scale
+                        box3d_center = box3d_center * rand_scale
+                        box3d_size = box3d_size * rand_scale
 
                     # Size
                     size_class, size_residual = size2class(box3d_size, obj.classname)
@@ -494,12 +500,13 @@ class MyDataFlow(RNGDataFlow):
                     size_residuals.append(size_residual / type_mean_size[obj.classname])
 
                 if len(bboxes_xyz) > 0:
-                    if flip_x:
-                        pc_upright_camera[..., 0] = -pc_upright_camera[..., 0]
-                    if flip_z:
-                        pc_upright_camera[..., 2] = -pc_upright_camera[..., 2]
-                    pc_upright_camera[:, :3] = (roty(rand_roty_angle) @ pc_upright_camera[:, :3].T).T
-                    pc_upright_camera[:, :3] = pc_upright_camera[:, :3] * rand_scale
+                    if self.training:
+                        if flip_x:
+                            pc_upright_camera[..., 0] = -pc_upright_camera[..., 0]
+                        if flip_z:
+                            pc_upright_camera[..., 2] = -pc_upright_camera[..., 2]
+                        pc_upright_camera[:, :3] = (roty(rand_roty_angle) @ pc_upright_camera[:, :3].T).T
+                        pc_upright_camera[:, :3] = pc_upright_camera[:, :3] * rand_scale
 
                     yield [pc_upright_camera[:, :3], np.array(bboxes_xyz), np.array(bboxes_lwh), np.array(semantic_labels),
                            np.array(heading_labels), np.array(heading_residuals), np.array(size_labels), np.array(size_residuals)]

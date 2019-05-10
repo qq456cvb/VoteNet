@@ -6,7 +6,7 @@ import multiprocessing
 import six
 import numpy as np
 
-BATCH_SIZE = 4
+BATCH_SIZE = 2
 
 
 def pad_along_axis(array, target_length, axis=0):

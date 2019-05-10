@@ -9,4 +9,4 @@ This is an unofficial implementation of "Deep Hough Voting for 3D Object Detecti
 # TODOs
 * ~~Data augmentation~~
 * Test/Validation mAP
-* 3D NMS
+* ~~3D NMS~~

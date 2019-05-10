@@ -2,12 +2,17 @@ import os
 import sys
 BASE_DIR = os.path.dirname(__file__)
 sys.path.append(BASE_DIR)
-sys.path.append(os.path.join(BASE_DIR, '../utils'))
+ROOT_DIR = BASE_DIR
+sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/sampling'))
+sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/grouping'))
+sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/3d_nms'))
 import tensorflow as tf
 from tensorpack import *
 import numpy as np
 from tensorpack.tfutils import get_current_tower_context, gradproc, optimizer, summary, varreplace
 from utils import pointnet_sa_module, pointnet_fp_module
+from dataset import class_mean_size
+from tf_nms3d import NMS3D
 import config
 
 
@@ -61,17 +66,54 @@ class Model(ModelDesc):
         bboxes_xyz_votes_gt = tf.gather_nd(bboxes_xyz, tf.stack([
             tf.tile(tf.expand_dims(tf.range(tf.shape(votes_assignment)[0]), -1), [1, tf.shape(votes_assignment)[1]]),
             votes_assignment], 2))  # B * N * 3
-        vote_reg_loss = tf.reduce_mean(tf.norm(votes_xyz - bboxes_xyz_votes_gt, axis=-1) * tf.cast(surface_ind, tf.float32), name='vote_reg_loss')
+        vote_reg_loss = tf.reduce_mean(tf.norm(votes_xyz - bboxes_xyz_votes_gt, ord=1, axis=-1) * tf.cast(surface_ind, tf.float32), name='vote_reg_loss')
         votes_points = votes[:, :, 3:]
 
         # Proposal Module layers
         # Farthest point sampling on seeds
-
         proposals_xyz, proposals_output, _ = pointnet_sa_module(votes_xyz, votes_points, npoint=config.PROPOSAL_NUM,
                                                                 radius=0.3, nsample=64, mlp=[128, 128, 128],
                                                                 mlp2=[128, 128, 5+2 * config.NH+4 * config.NS+config.NC],
                                                                 group_all=False, scope='proposal',
                                                                 sample_xyz=seeds_xyz)
+
+        if not get_current_tower_context().is_training:
+
+            def get_3d_bbox(box_size, heading_angle, center):
+                batch_size = tf.shape(heading_angle)[0]
+                c = tf.cos(heading_angle)
+                s = tf.sin(heading_angle)
+                rotation = tf.reshape(tf.stack([c, 0, s, 0, 1, 0, -s, 0, c], -1), tf.stack([batch_size, -1, 3, 3]))
+                l, w, h = box_size[..., 0], box_size[..., 1], box_size[..., 2]
+                corners = tf.reshape(tf.stack([l / 2, l / 2, -l / 2, -l / 2, l / 2, l / 2, -l / 2, -l / 2,
+                                               h / 2, h / 2, h / 2, h / 2, -h / 2, -h / 2, -h / 2, -h / 2,
+                                               w / 2, -w / 2, -w / 2, w / 2, w / 2, -w / 2, -w / 2, w / 2], -1),
+                                     tf.stack([batch_size, -1, 3, 8]))
+                return tf.einsum('ijkl,ijlm->ijmk', rotation, corners)  # B * N * 8 * 3
+
+            class_mean_size_tf = tf.constant(class_mean_size)
+            size_cls_pred = tf.argmax(proposals_output[..., 5 + 2 * config.NH: 5 + 2 * config.NH + config.NS], axis=-1)
+            size_cls_pred_onehot = tf.one_hot(size_cls_pred, depth=config.NS, axis=-1)  # B * N * NS
+            size_residual_pred = tf.reduce_sum(tf.expand_dims(size_cls_pred_onehot, -1)
+                                               * tf.reshape(proposals_output[..., 5+2 * config.NH + config.NS:5+2 * config.NH + 4 * config.NS], (-1, config.PROPOSAL_NUM, config.NS, 3)), axis=2)
+            size_pred = tf.gather_nd(class_mean_size_tf, size_cls_pred) * (1 + size_residual_pred)  # B * N * 3: size
+            center_pred = proposals_xyz + proposals_output[..., 2:5]  # B * N * 3
+            heading_cls_pred = tf.argmax(proposals_output[..., 5:5+config.NH], axis=-1)
+            heading_cls_pred_onehot = tf.one_hot(heading_cls_pred, depth=config.NH, axis=-1)
+            heading_residual_pred = tf.reduce_sum(tf.expand_dims(heading_cls_pred_onehot, -1)
+                                                  * proposals_output[..., 5 + config.NH:5+2 * config.NH], axis=2)
+            heading_pred = tf.floormod((heading_cls_pred * 2 + heading_residual_pred) * np.pi / config.NH, 2 * np.pi)
+
+            bboxes = get_3d_bbox(size_pred, heading_pred, center_pred)  # B * N * 8 * 3
+            bbox_corners = tf.concat([bboxes[:, :, 6, :], bboxes[:, :, 0, :]], axis=-1)  # B * N * 6
+            nms_iou = tf.get_variable('nms_iou', shape=[], initializer=tf.constant_initializer(0.25), trainable=False)
+            nms_idx = NMS3D(bbox_corners, tf.reduce_max(proposals_output[..., -config.NC:], axis=-1), proposals_output[..., :2], nms_iou)  # Nnms * 2
+
+            bboxes_pred = tf.gather_nd(bboxes, nms_idx, name='bboxes_pred')  # Nnms * 8 * 3
+            classes_pred = tf.argmax(tf.gather_nd(proposals_output[..., -config.NC:], nms_idx), axis=-1, name='classes_pred')  # Nnms
+            batch_idx = tf.identity(nms_idx[:, 0], name='batch_idx')  # Nnms, this is used to identify between batches
+
+            return
 
         # calculate positive and negative proposal idxes
         bboxes_xyz_gt = bboxes_xyz  # B * BB * 3

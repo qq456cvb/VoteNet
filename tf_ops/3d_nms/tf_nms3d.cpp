@@ -15,10 +15,10 @@ using namespace tensorflow;
 typedef Eigen::ThreadPoolDevice CPUDevice;
 
 REGISTER_OP("NonMaxSuppression3D")
-    .Attr("iou_threshold: float")
     .Input("bbox: float32")
     .Input("scores: float32")
     .Input("objectiveness: float32")
+    .Input("iou_threshold: float32")
     .Output("idx: int32")
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
         ::tensorflow::shape_inference::ShapeHandle dims; // batch_size * nbbox * 6
@@ -105,7 +105,7 @@ void DoNonMaxSuppressionOp(OpKernelContext* context, const Tensor& scores, const
       candidate_priority_queue(cmp);
 //   std::cout << objective_data.size() << std::endl;
   for (int i = 0; i < scores_data.size(); ++i) {
-    if (objective_data[i * 2 + 1] > 0.5) { // object exist
+    if (objective_data[i * 2 + 1] > objective_data[i * 2]) { // object exist
       candidate_priority_queue.emplace(Candidate({i / num_boxes, i % num_boxes, scores_data[i]}));
     }
   }
@@ -151,8 +151,6 @@ template <typename Device>
 class NonMaxSuppression3DOp : public OpKernel {
  public:
         explicit NonMaxSuppression3DOp(OpKernelConstruction* context) : OpKernel(context) {
-            OP_REQUIRES_OK(context, context->GetAttr("iou_threshold", &threshold_));
-            OP_REQUIRES(context, threshold_ >= 0 && threshold_ <= 1, errors::InvalidArgument("3D NMS expects positive threshold between [0, 1]"));
 
         }
 
@@ -168,12 +166,15 @@ class NonMaxSuppression3DOp : public OpKernel {
             const Tensor& objectiveness_tensor = context->input(2);
             OP_REQUIRES(context, objectiveness_tensor.dims()==3 && objectiveness_tensor.shape().dim_size(2)==2, errors::InvalidArgument("3D NMS expects (batch_size, nbbox, 2) objectiveness shape."));
 
-            auto suppress_check_fn = CreateIOUSuppressCheckFn(bbox_tensor, threshold_);
+            const Tensor& iou_threshold = context->input(3);
+            OP_REQUIRES(context, TensorShapeUtils::IsScalar(iou_threshold.shape()), errors::InvalidArgument("3D NMS expects scalar threshold"));
+            const float iou_threshold_val = iou_threshold.scalar<float>()();
+            OP_REQUIRES(context, iou_threshold_val >= 0 && iou_threshold_val <= 1, errors::InvalidArgument("iou_threshold must be in [0, 1]"));
+
+            auto suppress_check_fn = CreateIOUSuppressCheckFn(bbox_tensor, iou_threshold_val);
             DoNonMaxSuppressionOp(context, scores_tensor, objectiveness_tensor, b, n,
-                          threshold_, suppress_check_fn);
+                          iou_threshold_val, suppress_check_fn);
         }
-    private:
-        float threshold_;
 };
 
 
