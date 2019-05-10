@@ -3,6 +3,7 @@ This is an unofficial implementation of "Deep Hough Voting for 3D Object Detecti
 
 # Training
 * Prepare SUN RGB-D dataset following the instructions of https://github.com/charlesq34/frustum-pointnets/tree/master/sunrgbd, note you only need to run `extract_rgbd_data.m`
+* Compile custom Tensorflow ops as described in PointNet++
 * Pass the root folder of generated data in `MyDataFlow` and run `run.py`.
 
 # TODOs
