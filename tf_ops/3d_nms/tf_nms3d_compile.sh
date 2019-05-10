@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+
+g++ -std=c++11 tf_nms3d.cpp -o tf_nms3d_so.so -shared -fPIC -I $(python -c 'import tensorflow as tf; print(tf.sysconfig.get_include())') -I /usr/local/cuda/include -I $(python -c 'import tensorflow as tf; print(tf.sysconfig.get_include())')/external/nsync/public -lcudart -L /usr/local/cuda/lib64/ -L$(python -c 'import tensorflow as tf; print(tf.sysconfig.get_lib())') -ltensorflow_framework -O2 -D_GLIBCXX_USE_CXX11_ABI=0
