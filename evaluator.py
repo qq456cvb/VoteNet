@@ -34,6 +34,7 @@ def iou_3d(bbox1, bbox2):
     return max(iou_xz * min(bbox1[0, 1], bbox2[0, 1]) - max(bbox1[4, 1], bbox2[4, 1]), 0)
 
 
+# this is incorrect!!! TODO
 def eval_mAP(dataset, pred_func, ious):
     gt_labels_all = {iou: {t: [] for t in type2class} for iou in ious}
     pred_scores_all = {t: [] for t in type2class}
