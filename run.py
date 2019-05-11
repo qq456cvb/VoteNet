@@ -1,8 +1,9 @@
 from tensorpack import *
 import tensorpack.utils
 from model import Model
-from dataset import MyDataFlow
+from dataset import MyDataFlow, sunrgbd_object
 import multiprocessing
+from evaluator import Evaluator, eval_mAP
 import six
 import numpy as np
 
@@ -96,6 +97,11 @@ if __name__ == '__main__':
     train_set = MyDataFlow('/media/neil/DATA/mysunrgbd', 'training')
     test_set = MyDataFlow('/media/neil/DATA/mysunrgbd', 'training')  # TODO: prepare test data
 
+    print(eval_mAP(sunrgbd_object('/media/neil/DATA/mysunrgbd', 'training'), OfflinePredictor(PredictConfig(
+            model=Model(),
+            input_names=['points'],
+            output_names=['bboxes_pred', 'class_scores_pred', 'batch_idx'])), [0.25]))
+
     # dataset = BatchData(PrefetchData(train_set, 4, 4), BATCH_SIZE)
 
     lr_schedule = [(80, 1e-4), (120, 1e-5)]
@@ -111,9 +117,8 @@ if __name__ == '__main__':
         callbacks=[
             ModelSaver(),  # save the model after every epoch
             ScheduledHyperParamSetter('learning_rate', lr_schedule),
-            # TODO: compute mAP on test set
-            # InferenceRunner(BatchData(PrefetchData(test_set, multiprocessing.cpu_count() // 2, multiprocessing.cpu_count() // 2), BATCH_SIZE),
-            #                 [ScalarStats(['obj_accuracy', 'total_cost'])]),
+            # compute mAP on val set
+            Evaluator('/media/neil/DATA/mysunrgbd', 'training', 1)
             # MaxSaver('val_accuracy'),  # save the model with highest accuracy
         ],
         # steps_per_epoch=100,

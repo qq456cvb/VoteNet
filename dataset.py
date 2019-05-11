@@ -555,7 +555,7 @@ if __name__ == '__main__':
         from viz_utils import draw_lidar, draw_gt_boxes3d
 
         median_list = []
-        dataset = MyDataFlow('D:\\mysunrgbd', 'training')
+        dataset = MyDataFlow('/media/neil/DATA/mysunrgbd', 'training')
         dataset.reset_state()
         # print(type(dataset.input_list[0][0, 0]))
         # print(dataset.input_list[0].shape)

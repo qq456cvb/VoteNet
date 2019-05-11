@@ -51,7 +51,7 @@ static inline float IOUGreaterThanThreshold(
     
     const float area_i = (xmax_i - xmin_i) * (ymax_i - ymin_i) * (zmax_i - zmin_i);
     const float area_j = (xmax_j - xmin_j) * (ymax_j - ymin_j) * (zmax_j - zmin_j);
-    std::cout << area_i << ", " << area_j << std::endl;
+    std::cout << xmax_i - xmin_i << ", " << ymax_i - ymin_i << ", " <<  zmax_i - zmin_i << std::endl;
     if (area_i <= 0 || area_j <= 0) return 0.0;
     const float intersection_xmin = std::max<float>(xmin_i, xmin_j);
     const float intersection_ymin = std::max<float>(ymin_i, ymin_j);
@@ -156,15 +156,16 @@ class NonMaxSuppression3DOp : public OpKernel {
 
         void Compute(OpKernelContext* context) override {
             const Tensor& bbox_tensor = context->input(0);
+//            std::cout << bbox_tensor.dims() << ", " << bbox_tensor.shape().dim_size(2) << std::endl;
             OP_REQUIRES(context, bbox_tensor.dims()==3 && bbox_tensor.shape().dim_size(2)==6, errors::InvalidArgument("3D NMS expects (batch_size, nbbox, 6) bbox shape."));
             int b = bbox_tensor.shape().dim_size(0);
             int n = bbox_tensor.shape().dim_size(1);
 
             const Tensor& scores_tensor = context->input(1);
-            OP_REQUIRES(context, scores_tensor.dims()==2, errors::InvalidArgument("3D NMS expects (batch_size, nbbox) scores shape."));
+            OP_REQUIRES(context, scores_tensor.dims()==2 && scores_tensor.shape().dim_size(0) == b && scores_tensor.shape().dim_size(1) == n, errors::InvalidArgument("3D NMS expects (batch_size, nbbox) scores shape."));
 
             const Tensor& objectiveness_tensor = context->input(2);
-            OP_REQUIRES(context, objectiveness_tensor.dims()==3 && objectiveness_tensor.shape().dim_size(2)==2, errors::InvalidArgument("3D NMS expects (batch_size, nbbox, 2) objectiveness shape."));
+            OP_REQUIRES(context, objectiveness_tensor.dims()==3 && objectiveness_tensor.shape().dim_size(0) == b && objectiveness_tensor.shape().dim_size(1) == n && objectiveness_tensor.shape().dim_size(2)==2, errors::InvalidArgument("3D NMS expects (batch_size, nbbox, 2) objectiveness shape."));
 
             const Tensor& iou_threshold = context->input(3);
             OP_REQUIRES(context, TensorShapeUtils::IsScalar(iou_threshold.shape()), errors::InvalidArgument("3D NMS expects scalar threshold"));

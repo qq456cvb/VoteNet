@@ -7,7 +7,7 @@ sys.path.append(BASE_DIR)
 nms3d = tf.load_op_library(os.path.join(BASE_DIR, 'tf_nms3d_so.so'))
 
 
-def NMS3D(iou_threshold, bboxes, scores, objectiveness):
+def NMS3D(bboxes, scores, objectiveness, iou_threshold):
     return nms3d.non_max_suppression3d(bboxes, scores, objectiveness, iou_threshold)
 
 
@@ -21,6 +21,7 @@ if __name__=='__main__':
         [-1, -1, -1, 1, 1, 1],
         [-1, -1, -1, 0.8, 0.8, 0.8],
     ]]).astype('float32')
+    print(bboxes.shape)
     scores = np.array([[
         0.5, 0.6
     ]]).astype('float32')

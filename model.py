@@ -77,40 +77,45 @@ class Model(ModelDesc):
                                                                 group_all=False, scope='proposal',
                                                                 sample_xyz=seeds_xyz)
 
+        nms_iou = tf.get_variable('nms_iou', shape=[], initializer=tf.constant_initializer(0.25), trainable=False)
         if not get_current_tower_context().is_training:
-
             def get_3d_bbox(box_size, heading_angle, center):
                 batch_size = tf.shape(heading_angle)[0]
                 c = tf.cos(heading_angle)
                 s = tf.sin(heading_angle)
-                rotation = tf.reshape(tf.stack([c, 0, s, 0, 1, 0, -s, 0, c], -1), tf.stack([batch_size, -1, 3, 3]))
-                l, w, h = box_size[..., 0], box_size[..., 1], box_size[..., 2]
+                zeros = tf.zeros_like(c)
+                ones = tf.ones_like(c)
+                rotation = tf.reshape(tf.stack([c, zeros, s, zeros, ones, zeros, -s, zeros, c], -1), tf.stack([batch_size, -1, 3, 3]))
+                l, w, h = box_size[..., 0], box_size[..., 1], box_size[..., 2]  # lwh(xzy) order!!!
                 corners = tf.reshape(tf.stack([l / 2, l / 2, -l / 2, -l / 2, l / 2, l / 2, -l / 2, -l / 2,
                                                h / 2, h / 2, h / 2, h / 2, -h / 2, -h / 2, -h / 2, -h / 2,
                                                w / 2, -w / 2, -w / 2, w / 2, w / 2, -w / 2, -w / 2, w / 2], -1),
                                      tf.stack([batch_size, -1, 3, 8]))
-                return tf.einsum('ijkl,ijlm->ijmk', rotation, corners)  # B * N * 8 * 3
+                return tf.einsum('ijkl,ijlm->ijmk', rotation, corners) + tf.expand_dims(center, 2)  # B * N * 8 * 3
 
             class_mean_size_tf = tf.constant(class_mean_size)
             size_cls_pred = tf.argmax(proposals_output[..., 5 + 2 * config.NH: 5 + 2 * config.NH + config.NS], axis=-1)
             size_cls_pred_onehot = tf.one_hot(size_cls_pred, depth=config.NS, axis=-1)  # B * N * NS
             size_residual_pred = tf.reduce_sum(tf.expand_dims(size_cls_pred_onehot, -1)
                                                * tf.reshape(proposals_output[..., 5+2 * config.NH + config.NS:5+2 * config.NH + 4 * config.NS], (-1, config.PROPOSAL_NUM, config.NS, 3)), axis=2)
-            size_pred = tf.gather_nd(class_mean_size_tf, size_cls_pred) * (1 + size_residual_pred)  # B * N * 3: size
+            size_pred = tf.gather_nd(class_mean_size_tf, tf.expand_dims(size_cls_pred, -1)) * tf.maximum(1 + size_residual_pred, 1e-6)  # B * N * 3: size
+            # with tf.control_dependencies([tf.print(size_pred[0, 0, 2])]):
             center_pred = proposals_xyz + proposals_output[..., 2:5]  # B * N * 3
             heading_cls_pred = tf.argmax(proposals_output[..., 5:5+config.NH], axis=-1)
             heading_cls_pred_onehot = tf.one_hot(heading_cls_pred, depth=config.NH, axis=-1)
-            heading_residual_pred = tf.reduce_sum(tf.expand_dims(heading_cls_pred_onehot, -1)
+            heading_residual_pred = tf.reduce_sum(heading_cls_pred_onehot
                                                   * proposals_output[..., 5 + config.NH:5+2 * config.NH], axis=2)
-            heading_pred = tf.floormod((heading_cls_pred * 2 + heading_residual_pred) * np.pi / config.NH, 2 * np.pi)
+            heading_pred = tf.floormod((tf.cast(heading_cls_pred, tf.float32) * 2 + heading_residual_pred) * np.pi / config.NH, 2 * np.pi)
 
-            bboxes = get_3d_bbox(size_pred, heading_pred, center_pred)  # B * N * 8 * 3
-            bbox_corners = tf.concat([bboxes[:, :, 6, :], bboxes[:, :, 0, :]], axis=-1)  # B * N * 6
-            nms_iou = tf.get_variable('nms_iou', shape=[], initializer=tf.constant_initializer(0.25), trainable=False)
+            # with tf.control_dependencies([tf.print(size_residual_pred[0, :10, :]), tf.print(size_pred[0, :10, :])]):
+            bboxes = get_3d_bbox(size_pred, heading_pred, center_pred)  # B * N * 8 * 3,  lhw(xyz) order!!!
+            # with tf.control_dependencies([tf.print(bboxes[0, 0])]):
+            bbox_corners = tf.concat([bboxes[:, :, 6, :], bboxes[:, :, 0, :]], axis=-1)  # B * N * 6,  lhw(xyz) order!!!
+
             nms_idx = NMS3D(bbox_corners, tf.reduce_max(proposals_output[..., -config.NC:], axis=-1), proposals_output[..., :2], nms_iou)  # Nnms * 2
 
             bboxes_pred = tf.gather_nd(bboxes, nms_idx, name='bboxes_pred')  # Nnms * 8 * 3
-            classes_pred = tf.argmax(tf.gather_nd(proposals_output[..., -config.NC:], nms_idx), axis=-1, name='classes_pred')  # Nnms
+            class_scores_pred = tf.gather_nd(proposals_output[..., -config.NC:], nms_idx, name='class_scores_pred')  # Nnms * C
             batch_idx = tf.identity(nms_idx[:, 0], name='batch_idx')  # Nnms, this is used to identify between batches
 
             return
