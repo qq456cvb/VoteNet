@@ -119,18 +119,19 @@ def get_3d_box(box_size, heading_angle, center):
 class sunrgbd_object(object):
     ''' Load and parse object data '''
 
-    def __init__(self, root_dir, split='training'):
+    def __init__(self, root_dir, split='training', idx_list=None):
         self.root_dir = root_dir
         self.split = split
         self.split_dir = os.path.join(root_dir, split)
 
-        if split == 'training':
-            self.num_samples = 10335
-        elif split == 'testing':
-            self.num_samples = 2860
-        else:
-            print('Unknown split: %s' % (split))
-            exit(-1)
+        # if split == 'training':
+        #     self.num_samples = 10335
+        # elif split == 'testing':
+        #     self.num_samples = 2860
+        # else:
+        #     print('Unknown split: %s' % (split))
+        #     exit(-1)
+        self.samples = idx_list if idx_list is not None else list(range(10335 if split == 'training' else 2860))
 
         self.image_dir = os.path.join(self.split_dir, 'image')
         self.calib_dir = os.path.join(self.split_dir, 'calib')
@@ -139,7 +140,7 @@ class sunrgbd_object(object):
         # self.label_dimension_dir = os.path.join(self.split_dir, 'label_dimension')
 
     def __len__(self):
-        return self.num_samples
+        return len(self.samples)
 
     def get_image(self, idx):
         img_filename = os.path.join(self.image_dir, '%06d.jpg' % (idx))
@@ -394,14 +395,14 @@ def extract_roi_seg(idx_filename, split, output_filename, viz, perturb_box2d=Fal
 
 
 class MyDataFlow(RNGDataFlow):
-    def __init__(self, root, split):
-        self.dataset = sunrgbd_object(root, split)
+    def __init__(self, root, split, idx_list=None):
+        self.dataset = sunrgbd_object(root, split, idx_list)
         self.training = split == 'training'
         self.type_whitelist = ('bed', 'table', 'sofa', 'chair', 'toilet', 'desk', 'dresser', 'night_stand',
                                     'bookshelf', 'bathtub')
 
     def __len__(self):
-        return 10335 if self.training else 2860
+        return len(self.dataset)
 
     def __iter__(self):
         while True:

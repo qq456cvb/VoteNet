@@ -11,6 +11,7 @@ from dataset import *
 import numpy as np
 import config
 from shapely.geometry import Polygon
+import itertools
 from sklearn.metrics import average_precision_score
 from tensorpack.utils.stats import StatCounter
 from tensorpack.utils.utils import get_tqdm_kwargs
@@ -34,11 +35,68 @@ def iou_3d(bbox1, bbox2):
     return max(iou_xz * min(bbox1[0, 1], bbox2[0, 1]) - max(bbox1[4, 1], bbox2[4, 1]), 0)
 
 
-# this is incorrect!!! TODO
+"""
+ Calculate the AP given the recall and precision array
+    1st) We compute a version of the measured precision/recall curve with
+         precision monotonically decreasing
+    2nd) We compute the AP as the area under this curve by numerical integration.
+"""
+def voc_ap(rec, prec):
+    """
+    --- Official matlab code VOC2012---
+    mrec=[0 ; rec ; 1];
+    mpre=[0 ; prec ; 0];
+    for i=numel(mpre)-1:-1:1
+            mpre(i)=max(mpre(i),mpre(i+1));
+    end
+    i=find(mrec(2:end)~=mrec(1:end-1))+1;
+    ap=sum((mrec(i)-mrec(i-1)).*mpre(i));
+    """
+    rec.insert(0, 0.0) # insert 0.0 at begining of list
+    rec.append(1.0) # insert 1.0 at end of list
+    mrec = rec[:]
+    prec.insert(0, 0.0) # insert 0.0 at begining of list
+    prec.append(0.0) # insert 0.0 at end of list
+    mpre = prec[:]
+    """
+     This part makes the precision monotonically decreasing
+        (goes from the end to the beginning)
+        matlab: for i=numel(mpre)-1:-1:1
+                    mpre(i)=max(mpre(i),mpre(i+1));
+    """
+    # matlab indexes start in 1 but python in 0, so I have to do:
+    #     range(start=(len(mpre) - 2), end=0, step=-1)
+    # also the python function range excludes the end, resulting in:
+    #     range(start=(len(mpre) - 2), end=-1, step=-1)
+    for i in range(len(mpre)-2, -1, -1):
+        mpre[i] = max(mpre[i], mpre[i+1])
+    """
+     This part creates a list of indexes where the recall changes
+        matlab: i=find(mrec(2:end)~=mrec(1:end-1))+1;
+    """
+    i_list = []
+    for i in range(1, len(mrec)):
+        if mrec[i] != mrec[i-1]:
+            i_list.append(i) # if it was matlab would be i + 1
+    """
+     The Average Precision (AP) is the area under the curve
+        (numerical integration)
+        matlab: ap=sum((mrec(i)-mrec(i-1)).*mpre(i));
+    """
+    ap = 0.0
+    for i in i_list:
+        ap += ((mrec[i]-mrec[i-1])*mpre[i])
+    return ap, mrec, mpre
+
+
+# idea reference: https://github.com/Cartucho/mAP
 def eval_mAP(dataset, pred_func, ious):
-    gt_labels_all = {iou: {t: [] for t in type2class} for iou in ious}
-    pred_scores_all = {t: [] for t in type2class}
-    for idx in range(1, 10):
+    fps = {iou: {t: [] for t in type2class} for iou in ious}
+    tps = {iou: {t: [] for t in type2class} for iou in ious}
+    confidence = {t: [] for t in type2class}
+    aps = {iou: {t: 0 for t in type2class} for iou in ious}
+    gt_counter_per_class = {t: 0 for t in type2class}
+    for idx in range(len(dataset)):
         try:
             calib = dataset.get_calibration(idx)
             objects = dataset.get_label_objects(idx)
@@ -51,10 +109,11 @@ def eval_mAP(dataset, pred_func, ious):
             pc_image_coord, _ = calib.project_upright_depth_to_image(pc_upright_depth)
 
             bboxes_pred, class_scores_pred, _ = pred_func(pc_upright_camera[None, :, :3])
+            class_score_pred = np.max(class_scores_pred, axis=-1)
             # sort by confidence, high 2 low
-            sort_idx = np.argsort(-np.max(class_scores_pred, axis=-1))
-            bboxes_pred = bboxes_pred[sort_idx]
-            class_scores_pred = class_scores_pred[sort_idx]
+            # sort_idx = np.argsort(-np.max(class_scores_pred, axis=-1))
+            # bboxes_pred = bboxes_pred[sort_idx]
+            # class_scores_pred = class_scores_pred[sort_idx]
             class_labels_pred = np.argmax(class_scores_pred, -1)
 
             if not objects:
@@ -62,7 +121,6 @@ def eval_mAP(dataset, pred_func, ious):
 
             gt_bboxes = []
             gt_classes = []
-            gt_labels = {iou: [] for iou in ious}
             for obj_idx in range(len(objects)):
                 obj = objects[obj_idx]
                 if obj.classname not in type_whitelist:
@@ -95,6 +153,7 @@ def eval_mAP(dataset, pred_func, ious):
                            class2angle(angle_class, angle_residual, config.NH), box3d_center)
                 gt_bboxes.append(bbox)
                 gt_classes.append(type2class[obj.classname])
+                gt_counter_per_class[obj.classname] += 1
 
             gt_matched = {k: False for k in range(len(gt_bboxes))}
             for i, bbox_pred in enumerate(bboxes_pred):
@@ -110,38 +169,65 @@ def eval_mAP(dataset, pred_func, ious):
                 for iou in ious:
                     if max_overlap > iou and not gt_matched[gt_match]:
                         gt_matched[gt_match] = True
-                        gt_labels[iou].append(1)
+                        tps[iou][class_labels_pred[i]].append(1)
+                        fps[iou][class_labels_pred[i]].append(0)
                     else:
-                        gt_labels[iou].append(0)
+                        tps[iou][class_labels_pred[i]].append(0)
+                        fps[iou][class_labels_pred[i]].append(1)
 
-            if len(class_labels_pred) > 0:
-                for iou in ious:
-                    for t in type2class:
-                        cls_idx = class_labels_pred == type2class[t]
-                        pred_scores_all[t].extend(np.max(class_scores_pred, axis=-1)[cls_idx])
-                        gt_labels_all[iou][t].extend(np.asarray(gt_labels[iou])[cls_idx])
+                confidence[class_labels_pred[i]].append(class_score_pred[i])
+
         except Exception as e:
             print(e)
 
-    aps = {iou: {t: 0 for t in type2class} for iou in ious}
     for iou in ious:
         for t in type2class:
-            aps[iou][t] = average_precision_score(gt_labels_all[iou][t], pred_scores_all[t])
+            tp = tps[iou][t]
+            fp = fps[iou][t]
+            # sort by confidence
+            tp.sort(key=lambda k: -confidence[tp.index(k)])
+            fp.sort(key=lambda k: -confidence[fp.index(k)])
+            tp = list(itertools.accumulate(tp))
+            fp = list(itertools.accumulate(fp))
 
-    return aps
+            rec = tp[:]
+            for i, val in enumerate(tp):
+                rec[i] = float(tp[i]) / gt_counter_per_class[t]
+            # print(rec)
+            prec = tp[:]
+            for i, val in enumerate(tp):
+                prec[i] = float(tp[i]) / (fp[i] + tp[i])
+            # print(prec)
+
+            ap, mrec, mprec = voc_ap(rec[:], prec[:])
+            aps[iou][t] = ap
+
+    return {iou: np.mean(list(aps[iou].values())) for iou in ious}
 
 
-# TODO: compute mAP
 class Evaluator(Callback):
-    def __init__(self, root, split, batch_size):
-        self.dataset = sunrgbd_object(root, split)
+    def __init__(self, root, split, batch_size, idx_list=None):
+        self.dataset = sunrgbd_object(root, split, idx_list)
         self.batch_size = batch_size  # not used for now
 
     def _setup_graph(self):
         self.pred_func = self.trainer.get_predictor(['points'], ['bboxes_pred', 'class_scores_pred', 'batch_idx'])
 
     def _before_train(self):
-        print(eval_mAP(self.dataset, self.pred_func, [0.25]))
+        mAPs = eval_mAP(self.dataset, self.pred_func, [0.25, 0.5])
+        for iou in mAPs:
+            logger.info(iou, " mAP:",  mAPs[iou])
 
     def _trigger_epoch(self):
-        pass
+        mAPs = eval_mAP(self.dataset, self.pred_func, [0.25, 0.5])
+        for iou in mAPs:
+            self.trainer.monitors.put_scalar('mAP%f' % iou, mAPs[iou])
+
+
+if __name__ == '__main__':
+    import itertools
+    from model import Model
+    print(eval_mAP(sunrgbd_object('/media/neil/DATA/mysunrgbd', 'training'), OfflinePredictor(PredictConfig(
+            model=Model(),
+            input_names=['points'],
+            output_names=['bboxes_pred', 'class_scores_pred', 'batch_idx'])), [0.25]))

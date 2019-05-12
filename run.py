@@ -94,13 +94,8 @@ if __name__ == '__main__':
 
     tensorpack.utils.logger.auto_set_dir()
 
-    train_set = MyDataFlow('/media/neil/DATA/mysunrgbd', 'training')
-    test_set = MyDataFlow('/media/neil/DATA/mysunrgbd', 'training')  # TODO: prepare test data
-
-    print(eval_mAP(sunrgbd_object('/media/neil/DATA/mysunrgbd', 'training'), OfflinePredictor(PredictConfig(
-            model=Model(),
-            input_names=['points'],
-            output_names=['bboxes_pred', 'class_scores_pred', 'batch_idx'])), [0.25]))
+    # TODO: train/val split
+    train_set = MyDataFlow('/media/neil/DATA/mysunrgbd', 'training', idx_list=None)
 
     # dataset = BatchData(PrefetchData(train_set, 4, 4), BATCH_SIZE)
 
@@ -118,7 +113,7 @@ if __name__ == '__main__':
             ModelSaver(),  # save the model after every epoch
             ScheduledHyperParamSetter('learning_rate', lr_schedule),
             # compute mAP on val set
-            Evaluator('/media/neil/DATA/mysunrgbd', 'training', 1)
+            Evaluator('/media/neil/DATA/mysunrgbd', 'training', 1, idx_list=None)
             # MaxSaver('val_accuracy'),  # save the model with highest accuracy
         ],
         # steps_per_epoch=100,

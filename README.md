@@ -8,5 +8,6 @@ This is an unofficial implementation of "Deep Hough Voting for 3D Object Detecti
 
 # TODOs
 * ~~Data augmentation~~
-* Test/Validation mAP
+* ~~Test/Validation mAP~~
+* Train/Validation split
 * ~~3D NMS~~
