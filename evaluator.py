@@ -111,9 +111,10 @@ def eval_mAP(dataset, pred_func, ious):
             bboxes_pred, class_scores_pred, _ = pred_func(pc_upright_camera[None, :, :3])
             class_score_pred = np.max(class_scores_pred, axis=-1)
             # sort by confidence, high 2 low
-            # sort_idx = np.argsort(-np.max(class_scores_pred, axis=-1))
-            # bboxes_pred = bboxes_pred[sort_idx]
-            # class_scores_pred = class_scores_pred[sort_idx]
+            sort_idx = np.argsort(-np.max(class_scores_pred, axis=-1))
+            bboxes_pred = bboxes_pred[sort_idx]
+            class_scores_pred = class_scores_pred[sort_idx]
+            class_score_pred = class_score_pred[sort_idx]
             class_labels_pred = np.argmax(class_scores_pred, -1)
 
             if not objects:
@@ -167,6 +168,7 @@ def eval_mAP(dataset, pred_func, ious):
                             gt_match = j
 
                 for iou in ious:
+                    # greedy match
                     if max_overlap > iou and not gt_matched[gt_match]:
                         gt_matched[gt_match] = True
                         tps[iou][class_labels_pred[i]].append(1)
