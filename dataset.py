@@ -131,7 +131,7 @@ class sunrgbd_object(object):
         # else:
         #     print('Unknown split: %s' % (split))
         #     exit(-1)
-        self.samples = idx_list if idx_list is not None else list(range(10335 if split == 'training' else 2860))
+        self.samples = idx_list if idx_list is not None else list(range(1, 10336 if split == 'training' else 2861))
 
         self.image_dir = os.path.join(self.split_dir, 'image')
         self.calib_dir = os.path.join(self.split_dir, 'calib')
@@ -407,7 +407,7 @@ class MyDataFlow(RNGDataFlow):
     def __iter__(self):
         while True:
             try:
-                idx = self.rng.randint(len(self))
+                idx = self.rng.choice(self.dataset.samples)
                 # idx = 10
                 calib = self.dataset.get_calibration(idx)
                 objects = self.dataset.get_label_objects(idx)

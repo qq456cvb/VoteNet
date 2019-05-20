@@ -96,99 +96,100 @@ def eval_mAP(dataset, pred_func, ious):
     confidence = {t: [] for t in type2class}
     aps = {iou: {t: 0 for t in type2class} for iou in ious}
     gt_counter_per_class = {t: 0 for t in type2class}
-    for idx in range(len(dataset)):
-        try:
-            calib = dataset.get_calibration(idx)
-            objects = dataset.get_label_objects(idx)
-            pc_upright_depth = dataset.get_depth(idx)
-            pc_upright_depth = pc_upright_depth[
-                                np.random.choice(pc_upright_depth.shape[0], config.POINT_NUM, replace=False), :]  # subsample
-            pc_upright_camera = np.zeros_like(pc_upright_depth)
-            pc_upright_camera[:, 0:3] = calib.project_upright_depth_to_upright_camera(pc_upright_depth[:, 0:3])
-            pc_upright_camera[:, 3:] = pc_upright_depth[:, 3:]
-            pc_image_coord, _ = calib.project_upright_depth_to_image(pc_upright_depth)
+    for idx in dataset.samples:
+        calib = dataset.get_calibration(idx)
+        objects = dataset.get_label_objects(idx)
+        pc_upright_depth = dataset.get_depth(idx)
+        pc_upright_depth = pc_upright_depth[
+                            np.random.choice(pc_upright_depth.shape[0], config.POINT_NUM, replace=False), :]  # subsample
+        pc_upright_camera = np.zeros_like(pc_upright_depth)
+        pc_upright_camera[:, 0:3] = calib.project_upright_depth_to_upright_camera(pc_upright_depth[:, 0:3])
+        pc_upright_camera[:, 3:] = pc_upright_depth[:, 3:]
+        pc_image_coord, _ = calib.project_upright_depth_to_image(pc_upright_depth)
 
-            bboxes_pred, class_scores_pred, _ = pred_func(pc_upright_camera[None, :, :3])
-            class_score_pred = np.max(class_scores_pred, axis=-1)
-            # sort by confidence, high 2 low
-            sort_idx = np.argsort(-np.max(class_scores_pred, axis=-1))
-            bboxes_pred = bboxes_pred[sort_idx]
-            class_scores_pred = class_scores_pred[sort_idx]
-            class_score_pred = class_score_pred[sort_idx]
-            class_labels_pred = np.argmax(class_scores_pred, -1)
+        bboxes_pred, class_scores_pred, _ = pred_func(pc_upright_camera[None, :, :3])
+        class_score_pred = np.max(class_scores_pred, axis=-1)
+        # sort by confidence, high 2 low
+        sort_idx = np.argsort(-np.max(class_scores_pred, axis=-1))
+        bboxes_pred = bboxes_pred[sort_idx]
+        class_scores_pred = class_scores_pred[sort_idx]
+        class_score_pred = class_score_pred[sort_idx]
+        class_labels_pred = np.argmax(class_scores_pred, -1)
 
-            if not objects:
+        if not objects:
+            continue
+
+        gt_bboxes = []
+        gt_classes = []
+        for obj_idx in range(len(objects)):
+            obj = objects[obj_idx]
+            if obj.classname not in type_whitelist:
                 continue
 
-            gt_bboxes = []
-            gt_classes = []
-            for obj_idx in range(len(objects)):
-                obj = objects[obj_idx]
-                if obj.classname not in type_whitelist:
-                    continue
+            # 2D BOX: Get pts rect backprojected
+            box2d = obj.box2d
+            xmin, ymin, xmax, ymax = box2d
+            box_fov_inds = (pc_image_coord[:, 0] < xmax) & (pc_image_coord[:, 0] >= xmin) & (
+                    pc_image_coord[:, 1] < ymax) & (pc_image_coord[:, 1] >= ymin)
+            pc_in_box_fov = pc_upright_camera[box_fov_inds, :]
+            # Get frustum angle (according to center pixel in 2D BOX)
+            # 3D BOX: Get pts velo in 3d box
+            box3d_pts_2d, box3d_pts_3d = compute_box_3d(obj, calib)
+            box3d_pts_3d = calib.project_upright_depth_to_upright_camera(box3d_pts_3d)
+            _, inds = extract_pc_in_box3d(pc_in_box_fov, box3d_pts_3d)
+            # Get 3D BOX size
+            box3d_size = np.array([2 * obj.l, 2 * obj.w, 2 * obj.h])
+            box3d_center = (box3d_pts_3d[0, :] + box3d_pts_3d[6, :]) / 2
 
-                # 2D BOX: Get pts rect backprojected
-                box2d = obj.box2d
-                xmin, ymin, xmax, ymax = box2d
-                box_fov_inds = (pc_image_coord[:, 0] < xmax) & (pc_image_coord[:, 0] >= xmin) & (
-                        pc_image_coord[:, 1] < ymax) & (pc_image_coord[:, 1] >= ymin)
-                pc_in_box_fov = pc_upright_camera[box_fov_inds, :]
-                # Get frustum angle (according to center pixel in 2D BOX)
-                # 3D BOX: Get pts velo in 3d box
-                box3d_pts_2d, box3d_pts_3d = compute_box_3d(obj, calib)
-                box3d_pts_3d = calib.project_upright_depth_to_upright_camera(box3d_pts_3d)
-                _, inds = extract_pc_in_box3d(pc_in_box_fov, box3d_pts_3d)
-                # Get 3D BOX size
-                box3d_size = np.array([2 * obj.l, 2 * obj.w, 2 * obj.h])
-                box3d_center = (box3d_pts_3d[0, :] + box3d_pts_3d[6, :]) / 2
+            # Size
+            size_class, size_residual = size2class(box3d_size, obj.classname)
+            angle_class, angle_residual = angle2class(obj.heading_angle, config.NH)
 
-                # Size
-                size_class, size_residual = size2class(box3d_size, obj.classname)
-                angle_class, angle_residual = angle2class(obj.heading_angle, config.NH)
+            # Reject object with too few points
+            if len(inds) < 5:
+                continue
 
-                # Reject object with too few points
-                if len(inds) < 5:
-                    continue
+            bbox = get_3d_box(class2size(size_class, size_residual),
+                       class2angle(angle_class, angle_residual, config.NH), box3d_center)
+            gt_bboxes.append(bbox)
+            gt_classes.append(type2class[obj.classname])
+            gt_counter_per_class[obj.classname] += 1
 
-                bbox = get_3d_box(class2size(size_class, size_residual),
-                           class2angle(angle_class, angle_residual, config.NH), box3d_center)
-                gt_bboxes.append(bbox)
-                gt_classes.append(type2class[obj.classname])
-                gt_counter_per_class[obj.classname] += 1
+        gt_matched = {k: False for k in range(len(gt_bboxes))}
+        for i, bbox_pred in enumerate(bboxes_pred):
+            max_overlap = -1
+            gt_match = -1
+            for j, gt_bbox in enumerate(gt_bboxes):
+                if gt_classes[j] == class_labels_pred[i]:
+                    overlap = iou_3d(bbox_pred, gt_bbox)
+                    if overlap > max_overlap:
+                        max_overlap = overlap
+                        gt_match = j
 
-            gt_matched = {k: False for k in range(len(gt_bboxes))}
-            for i, bbox_pred in enumerate(bboxes_pred):
-                max_overlap = -1
-                gt_match = -1
-                for j, gt_bbox in enumerate(gt_bboxes):
-                    if gt_classes[j] == class_labels_pred[i]:
-                        overlap = iou_3d(bbox_pred, gt_bbox)
-                        if overlap > max_overlap:
-                            max_overlap = overlap
-                            gt_match = j
+            for iou in ious:
+                # greedy match
+                if max_overlap > iou and not gt_matched[gt_match]:
+                    gt_matched[gt_match] = True
+                    tps[iou][class2type[class_labels_pred[i]]].append(1)
+                    fps[iou][class2type[class_labels_pred[i]]].append(0)
+                else:
+                    tps[iou][class2type[class_labels_pred[i]]].append(0)
+                    fps[iou][class2type[class_labels_pred[i]]].append(1)
 
-                for iou in ious:
-                    # greedy match
-                    if max_overlap > iou and not gt_matched[gt_match]:
-                        gt_matched[gt_match] = True
-                        tps[iou][class_labels_pred[i]].append(1)
-                        fps[iou][class_labels_pred[i]].append(0)
-                    else:
-                        tps[iou][class_labels_pred[i]].append(0)
-                        fps[iou][class_labels_pred[i]].append(1)
+            confidence[class2type[class_labels_pred[i]]].append(class_score_pred[i])
 
-                confidence[class_labels_pred[i]].append(class_score_pred[i])
-
-        except Exception as e:
-            print(e)
+        # except Exception as e:
+        #     print(e)
 
     for iou in ious:
         for t in type2class:
             tp = tps[iou][t]
             fp = fps[iou][t]
             # sort by confidence
-            tp.sort(key=lambda k: -confidence[tp.index(k)])
-            fp.sort(key=lambda k: -confidence[fp.index(k)])
+            tp = [x for _, x in sorted(zip(confidence[t], tp), reverse=True)]
+            fp = [x for _, x in sorted(zip(confidence[t], fp), reverse=True)]
+            # tp.sort(key=lambda k: -confidence[class2type[tp.index(k)]])
+            # fp.sort(key=lambda k: -confidence[class2type[fp.index(k)]])
             tp = list(itertools.accumulate(tp))
             fp = list(itertools.accumulate(fp))
 
@@ -218,7 +219,7 @@ class Evaluator(Callback):
     def _before_train(self):
         mAPs = eval_mAP(self.dataset, self.pred_func, [0.25, 0.5])
         for iou in mAPs:
-            logger.info(iou, " mAP:",  mAPs[iou])
+            logger.info("mAP{0:.2}:{0:.4}".format(iou,  mAPs[iou]))
 
     def _trigger_epoch(self):
         mAPs = eval_mAP(self.dataset, self.pred_func, [0.25, 0.5])
@@ -229,7 +230,7 @@ class Evaluator(Callback):
 if __name__ == '__main__':
     import itertools
     from model import Model
-    print(eval_mAP(sunrgbd_object('/media/neil/DATA/mysunrgbd', 'training'), OfflinePredictor(PredictConfig(
+    print(eval_mAP(sunrgbd_object('/media/neil/DATA/mysunrgbd', 'training', idx_list=list(range(1, 10))), OfflinePredictor(PredictConfig(
             model=Model(),
             input_names=['points'],
-            output_names=['bboxes_pred', 'class_scores_pred', 'batch_idx'])), [0.25]))
+            output_names=['bboxes_pred', 'class_scores_pred', 'batch_idx'])), [0.25, 0.5]))
