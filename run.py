@@ -94,8 +94,8 @@ if __name__ == '__main__':
 
     tensorpack.utils.logger.auto_set_dir()
 
-    # TODO: train/val split
-    train_set = MyDataFlow('/media/neil/DATA/mysunrgbd', 'training', idx_list=None)
+    # this is the official train/val split
+    train_set = MyDataFlow('/media/neil/DATA/mysunrgbd', 'training', idx_list=list(range(5050, 10335)))
 
     # dataset = BatchData(PrefetchData(train_set, 4, 4), BATCH_SIZE)
 
@@ -113,7 +113,7 @@ if __name__ == '__main__':
             ModelSaver(),  # save the model after every epoch
             ScheduledHyperParamSetter('learning_rate', lr_schedule),
             # compute mAP on val set
-            Evaluator('/media/neil/DATA/mysunrgbd', 'training', 1, idx_list=None)
+            Evaluator('/media/neil/DATA/mysunrgbd', 'training', 1, idx_list=list(range(0, 5050))),
             # MaxSaver('val_accuracy'),  # save the model with highest accuracy
         ],
         # steps_per_epoch=100,
