@@ -113,7 +113,7 @@ if __name__ == '__main__':
             ModelSaver(),  # save the model after every epoch
             ScheduledHyperParamSetter('learning_rate', lr_schedule),
             # compute mAP on val set
-            Evaluator('/media/neil/DATA/mysunrgbd', 'training', 1, idx_list=list(range(1, 5051))),
+            PeriodicTrigger(Evaluator('/media/neil/DATA/mysunrgbd', 'training', 1, idx_list=list(range(1, 5051))), every_k_epochs=1, before_train=True),
             # MaxSaver('val_accuracy'),  # save the model with highest accuracy
         ],
         # steps_per_epoch=100,

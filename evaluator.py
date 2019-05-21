@@ -15,6 +15,7 @@ import itertools
 from sklearn.metrics import average_precision_score
 from tensorpack.utils.stats import StatCounter
 from tensorpack.utils.utils import get_tqdm_kwargs
+from tqdm import tqdm
 type_whitelist = ('bed', 'table', 'sofa', 'chair', 'toilet', 'desk', 'dresser', 'night_stand',
                                'bookshelf', 'bathtub')
 
@@ -96,7 +97,7 @@ def eval_mAP(dataset, pred_func, ious):
     confidence = {t: [] for t in type2class}
     aps = {iou: {t: 0 for t in type2class} for iou in ious}
     gt_counter_per_class = {t: 0 for t in type2class}
-    for idx in dataset.samples:
+    for idx in tqdm(dataset.samples):
         calib = dataset.get_calibration(idx)
         objects = dataset.get_label_objects(idx)
         pc_upright_depth = dataset.get_depth(idx)
@@ -217,11 +218,13 @@ class Evaluator(Callback):
         self.pred_func = self.trainer.get_predictor(['points'], ['bboxes_pred', 'class_scores_pred', 'batch_idx'])
 
     def _before_train(self):
+        logger.info('Evaluating mAP on validation set...')
         mAPs = eval_mAP(self.dataset, self.pred_func, [0.25, 0.5])
         for iou in mAPs:
             logger.info("mAP{0:.2}:{0:.4}".format(iou,  mAPs[iou]))
 
-    def _trigger_epoch(self):
+    def _trigger(self):
+        logger.info('Evaluating mAP on validation set...')
         mAPs = eval_mAP(self.dataset, self.pred_func, [0.25, 0.5])
         for iou in mAPs:
             self.trainer.monitors.put_scalar('mAP%f' % iou, mAPs[iou])
