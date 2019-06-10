@@ -153,6 +153,16 @@ class Model(ModelDesc):
         delta_gt = center_gt - tf.gather_nd(proposals_xyz, positive_idxes)
         center_loss = tf.reduce_mean(tf.reduce_sum(tf.losses.huber_loss(labels=delta_gt, predictions=delta_predicted, reduction=tf.losses.Reduction.NONE), axis=-1))
 
+        # Appendix A1: chamfer loss, assignment at one bbox to each gt bbox
+        bboxes_assignment_dual = tf.argmin(dist_mat, axis=1)  # B * BB
+        batch_idx = tf.tile(tf.expand_dims(tf.range(tf.shape(bboxes_assignment_dual, out_type=tf.int64)[0]), axis=-1), [1, tf.shape(bboxes_assignment_dual)[1]])  # B * BB
+        delta_gt_dual = bboxes_xyz_gt - tf.gather_nd(proposals_xyz, tf.stack([batch_idx, bboxes_assignment_dual], axis=-1))  # B * BB * 3
+        delta_predicted_dual = tf.gather_nd(proposals_output[..., 2:5], tf.stack([batch_idx, bboxes_assignment_dual], axis=-1))  # B * BB * 3)
+        center_loss_dual = tf.reduce_mean(tf.reduce_sum(tf.losses.huber_loss(labels=delta_gt_dual, predictions=delta_predicted_dual, reduction=tf.losses.Reduction.NONE), axis=-1))
+
+        # add up
+        center_loss += center_loss_dual
+
         # Heading loss
         heading_cls_gt = tf.gather_nd(bboxes_heading_labels_gt, positive_gt_idxes)
         heading_cls_score = tf.gather_nd(proposals_output[..., 5:5+config.NH], positive_idxes)
