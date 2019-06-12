@@ -235,7 +235,6 @@ void DoNonMaxSuppressionOp(OpKernelContext *context, const Tensor &scores, const
   while (!candidate_priority_queue.empty())
   {
     next_candidate = candidate_priority_queue.top();
-    candidate_priority_queue.pop();
 
     // Overlapping boxes are likely to have similar scores,
     // therefore we iterate through the previously selected boxes backwards
@@ -243,7 +242,7 @@ void DoNonMaxSuppressionOp(OpKernelContext *context, const Tensor &scores, const
     bool should_select = true;
     for (int j = selected.size() - 2; j >= 0; j -= 2)
     {
-      if (selected[j * 2] == next_candidate.batch_index && suppress_check_fn(next_candidate.batch_index, next_candidate.box_index, selected[j * 2 + 1]))
+      if (selected[j] == next_candidate.batch_index && suppress_check_fn(next_candidate.batch_index, next_candidate.box_index, selected[j + 1]))
       {
         should_select = false;
         break;
@@ -256,6 +255,7 @@ void DoNonMaxSuppressionOp(OpKernelContext *context, const Tensor &scores, const
       selected.push_back(next_candidate.box_index);
       selected_scores.push_back(next_candidate.score);
     }
+    candidate_priority_queue.pop();
   }
 
   // Allocate output tensors
