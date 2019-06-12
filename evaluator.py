@@ -156,7 +156,7 @@ def eval_mAP(dataset, pred_func, ious):
             gt_classes.append(type2class[obj.classname])
             gt_counter_per_class[obj.classname] += 1
 
-        gt_matched = {k: False for k in range(len(gt_bboxes))}
+        gt_matched = {iou: {k: False for k in range(len(gt_bboxes))} for iou in ious}
         for i, bbox_pred in enumerate(bboxes_pred):
             max_overlap = -1
             gt_match = -1
@@ -169,8 +169,8 @@ def eval_mAP(dataset, pred_func, ious):
 
             for iou in ious:
                 # greedy match
-                if max_overlap > iou and not gt_matched[gt_match]:
-                    gt_matched[gt_match] = True
+                if max_overlap > iou and not gt_matched[iou][gt_match]:
+                    gt_matched[iou][gt_match] = True
                     tps[iou][class2type[class_labels_pred[i]]].append(1)
                     fps[iou][class2type[class_labels_pred[i]]].append(0)
                 else:
@@ -196,7 +196,10 @@ def eval_mAP(dataset, pred_func, ious):
 
             rec = tp[:]
             for i, val in enumerate(tp):
-                rec[i] = float(tp[i]) / gt_counter_per_class[t]
+                if gt_counter_per_class[t] == 0:
+                    rec[i] = 0
+                else:
+                    rec[i] = float(tp[i]) / gt_counter_per_class[t]
             # print(rec)
             prec = tp[:]
             for i, val in enumerate(tp):
@@ -221,7 +224,7 @@ class Evaluator(Callback):
         logger.info('Evaluating mAP on validation set...')
         mAPs = eval_mAP(self.dataset, self.pred_func, [0.25, 0.5])
         for iou in mAPs:
-            logger.info("mAP{0:.2}:{0:.4}".format(iou,  mAPs[iou]))
+            logger.info("mAP{:.2f}:{:.4f}".format(iou,  mAPs[iou]))
 
     def _trigger(self):
         logger.info('Evaluating mAP on validation set...')
@@ -233,7 +236,10 @@ class Evaluator(Callback):
 if __name__ == '__main__':
     import itertools
     from model import Model
-    print(eval_mAP(sunrgbd_object('/media/neil/DATA/mysunrgbd', 'training', idx_list=list(range(1, 10))), OfflinePredictor(PredictConfig(
+    mAPs = eval_mAP(sunrgbd_object('/home/neil/mysunrgbd', 'training', idx_list=list(range(11, 21))), OfflinePredictor(PredictConfig(
             model=Model(),
+            session_init=SaverRestore('./train_log/run/checkpoint'),
             input_names=['points'],
-            output_names=['bboxes_pred', 'class_scores_pred', 'batch_idx'])), [0.25, 0.5]))
+            output_names=['bboxes_pred', 'class_scores_pred', 'batch_idx'])), [0.25, 0.5])
+    for iou in mAPs:
+        print("mAP{:.2f}:{:.4f}".format(iou, mAPs[iou]))
