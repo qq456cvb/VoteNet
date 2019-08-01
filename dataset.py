@@ -181,7 +181,6 @@ class MyDataFlow(RNGDataFlow):
         if self.training:
             self.rng.shuffle(self.dataset.samples)
         for idx in self.dataset.samples:
-            idx = 7334
             objects = self.dataset.get_label_objects(idx)
             if not objects:
                 continue

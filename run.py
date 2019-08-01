@@ -125,7 +125,7 @@ if __name__ == '__main__':
         callbacks=[
             ModelSaver(),  # save the model after every epoch
             ScheduledHyperParamSetter('learning_rate', lr_schedule),
-            SimpleMovingAverage(['obj_accuracy', 'sem_accuracy', 'total_cost'], 10),
+            SimpleMovingAverage(['obj_accuracy', 'sem_accuracy', 'total_cost'], 100),  # change the frequency for loss
             # compute mAP on val set
             PeriodicTrigger(Evaluator(MyDataFlow('/data/mysunrgbd', 'training', training=False, idx_list=list(range(1, 5051)), cache_dir='cache_val'), gt_all),
                             every_k_epochs=5),
