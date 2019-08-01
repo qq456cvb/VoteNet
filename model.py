@@ -18,17 +18,19 @@ import config
 
 class Model(ModelDesc):
     def inputs(self):
-        return [tf.placeholder(tf.float32, [None, config.POINT_NUM , 3], 'points'),
+        return [
+                tf.placeholder(tf.int32, [None,], 'data_idx'),
+                tf.placeholder(tf.float32, [None, config.POINT_NUM , 3], 'points'),
                 tf.placeholder(tf.float32, [None, None, 3], 'bboxes_xyz'),
                 tf.placeholder(tf.float32, [None, None, 3], 'bboxes_lwh'),
-                tf.placeholder(tf.int32, (None, None), 'semantic_labels'),
-                tf.placeholder(tf.int32, (None, None), 'heading_labels'),
-                tf.placeholder(tf.float32, (None, None), 'heading_residuals'),
-                tf.placeholder(tf.int32, (None, None), 'size_labels'),
-                tf.placeholder(tf.float32, (None, None, 3), 'size_residuals'),
+                tf.placeholder(tf.int32, (None, None), 'semantic_labels_input'),
+                tf.placeholder(tf.int32, (None, None), 'heading_labels_input'),
+                tf.placeholder(tf.float32, (None, None), 'heading_residuals_input'),
+                tf.placeholder(tf.int32, (None, None), 'size_labels_input'),
+                tf.placeholder(tf.float32, (None, None, 3), 'size_residuals_input'),
                 ]
 
-    def build_graph(self, x, bboxes_xyz, bboxes_lwh, semantic_labels, heading_labels, heading_residuals, size_labels, size_residuals):
+    def build_graph(self, _, x, bboxes_xyz, bboxes_lwh, semantic_labels, heading_labels, heading_residuals, size_labels, size_residuals):
         l0_xyz = x
         l0_points = x
 
@@ -77,8 +79,11 @@ class Model(ModelDesc):
                                                                 group_all=False, scope='proposal',
                                                                 sample_xyz=seeds_xyz)
 
+        obj_cls_score = tf.identity(proposals_output[..., :2], 'obj_scores')
+
         nms_iou = tf.get_variable('nms_iou', shape=[], initializer=tf.constant_initializer(0.25), trainable=False)
         if not get_current_tower_context().is_training:
+
             def get_3d_bbox(box_size, heading_angle, center):
                 batch_size = tf.shape(heading_angle)[0]
                 c = tf.cos(heading_angle)
@@ -132,11 +137,11 @@ class Model(ModelDesc):
         min_dist = tf.reduce_min(dist_mat, axis=-1)
 
         positive_idxes = tf.where(min_dist < config.POSITIVE_THRES)  # Np * 2
+        # with tf.control_dependencies([tf.print(tf.shape(positive_idxes))]):
         negative_idxes = tf.where(min_dist > config.NEGATIVE_THRES)  # Nn * 2
         positive_gt_idxes = tf.stack([positive_idxes[:, 0], tf.gather_nd(bboxes_assignment, positive_idxes)], axis=1)
 
         # objectiveness loss
-        obj_cls_score = proposals_output[..., :2]
         pos_obj_cls_score = tf.gather_nd(obj_cls_score, positive_idxes)
         pos_obj_cls_gt = tf.ones([tf.shape(positive_idxes)[0]], dtype=tf.int32)
         neg_obj_cls_score = tf.gather_nd(obj_cls_score, negative_idxes)
@@ -153,11 +158,11 @@ class Model(ModelDesc):
         delta_gt = center_gt - tf.gather_nd(proposals_xyz, positive_idxes)
         center_loss = tf.reduce_mean(tf.reduce_sum(tf.losses.huber_loss(labels=delta_gt, predictions=delta_predicted, reduction=tf.losses.Reduction.NONE), axis=-1))
 
-        # Appendix A1: chamfer loss, assignment at one bbox to each gt bbox
+        # Appendix A1: chamfer loss, assignment at least one bbox to each gt bbox
         bboxes_assignment_dual = tf.argmin(dist_mat, axis=1)  # B * BB
         batch_idx = tf.tile(tf.expand_dims(tf.range(tf.shape(bboxes_assignment_dual, out_type=tf.int64)[0]), axis=-1), [1, tf.shape(bboxes_assignment_dual)[1]])  # B * BB
         delta_gt_dual = bboxes_xyz_gt - tf.gather_nd(proposals_xyz, tf.stack([batch_idx, bboxes_assignment_dual], axis=-1))  # B * BB * 3
-        delta_predicted_dual = tf.gather_nd(proposals_output[..., 2:5], tf.stack([batch_idx, bboxes_assignment_dual], axis=-1))  # B * BB * 3)
+        delta_predicted_dual = tf.gather_nd(proposals_output[..., 2:5], tf.stack([batch_idx, bboxes_assignment_dual], axis=-1))  # B * BB * 3
         center_loss_dual = tf.reduce_mean(tf.reduce_sum(tf.losses.huber_loss(labels=delta_gt_dual, predictions=delta_predicted_dual, reduction=tf.losses.Reduction.NONE), axis=-1))
 
         # add up
@@ -183,7 +188,6 @@ class Model(ModelDesc):
         size_cls_gt_onehot = tf.tile(tf.expand_dims(tf.to_float(size_cls_gt_onehot), -1), [1, 1, 3])  # Np * NS * 3
         size_residual_gt = tf.gather_nd(bboxes_size_residuals_gt, positive_gt_idxes)  # Np * 3
         size_residual_predicted = tf.reshape(tf.gather_nd(proposals_output[..., 5+2 * config.NH + config.NS:5+2 * config.NH + 4 * config.NS], positive_idxes), (-1, config.NS, 3))  # Np * NS * 3
-
         size_residual_loss = tf.reduce_mean(tf.reduce_sum(tf.losses.huber_loss(labels=size_residual_gt,
                                                                                predictions=tf.reduce_sum(size_residual_predicted * tf.to_float(size_cls_gt_onehot), axis=1), reduction=tf.losses.Reduction.NONE), axis=-1))
 

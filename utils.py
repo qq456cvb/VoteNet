@@ -117,7 +117,8 @@ def pointnet_sa_module(xyz, points, npoint, radius, nsample, mlp, mlp2, group_al
             nsample = xyz.get_shape()[1].value
             new_xyz, new_points, idx, grouped_xyz = sample_and_group_all(xyz, points, use_xyz)
         else:
-            new_xyz, new_points, idx, grouped_xyz = sample_and_group(npoint, radius, nsample, xyz, points, knn, use_xyz, sample_xyz)
+            new_xyz, new_points, idx, grouped_xyz = sample_and_group(npoint, radius, nsample, xyz, points, knn, use_xyz,
+                                                                     sample_xyz)
 
         # Point Feature Embedding
         if use_nchw: new_points = tf.transpose(new_points, [0, 3, 1, 2])
@@ -149,7 +150,8 @@ def pointnet_sa_module(xyz, points, npoint, radius, nsample, mlp, mlp2, group_al
             if use_nchw: new_points = tf.transpose(new_points, [0, 3, 1, 2])
             for i, num_out_channel in enumerate(mlp2):
                 new_points = Conv2D("conv_post_%d" % i, new_points, num_out_channel, [1, 1], padding='VALID',
-                                    activation=None if i == len(mlp2) - 1 else (BNReLU if bn else tf.nn.relu), data_format=data_format)
+                                    activation=None if i == len(mlp2) - 1 else (BNReLU if bn else tf.nn.relu),
+                                    data_format=data_format)
             if use_nchw: new_points = tf.transpose(new_points, [0, 2, 3, 1])
 
         new_points = tf.squeeze(new_points, [2])  # (batch_size, npoints, mlp2[-1])
@@ -191,12 +193,74 @@ def pointnet_sa_module_msg(xyz, points, npoint, radius_list, nsample_list, mlp_l
             if use_nchw: grouped_points = tf.transpose(grouped_points, [0, 3, 1, 2])
             for j, num_out_channel in enumerate(mlp_list[i]):
                 grouped_points = Conv2D("conv%d_%d" % (i, j), grouped_points, num_out_channel, [1, 1], padding='VALID',
-                                    activation=BNReLU if bn else tf.nn.relu, data_format=data_format)
+                                        activation=BNReLU if bn else tf.nn.relu, data_format=data_format)
             if use_nchw: grouped_points = tf.transpose(grouped_points, [0, 2, 3, 1])
             new_points = tf.reduce_max(grouped_points, axis=[2])
             new_points_list.append(new_points)
         new_points_concat = tf.concat(new_points_list, axis=-1)
         return new_xyz, new_points_concat
+
+
+def flip_axis_to_camera(pc):
+    ''' Flip X-right,Y-forward,Z-up to X-right,Y-down,Z-forward
+        Input and output are both (N,3) array
+    '''
+    pc2 = np.copy(pc)
+    pc2[:, [0, 1, 2]] = pc2[:, [0, 2, 1]]  # cam X,Y,Z = depth X,-Z,Y
+    pc2[:, 1] *= -1
+    return pc2
+
+
+def is_clockwise(p):
+    x = p[:, 0]
+    y = p[:, 1]
+    return np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)) > 0
+
+
+def box_conversion(bbox):
+    """ In upright depth camera coord """
+    bbox3d = np.zeros((8, 3))
+    # Make clockwise
+    # NOTE: in box3d IoU evaluation we require the polygon vertices in
+    # counter clockwise order. However, from dumped data in MATLAB
+    # some of the polygons are in clockwise, some others are counter clockwise
+    # so we need to inspect each box and make them consistent..
+    xy = np.reshape(bbox[0:8], (4, 2))
+    if is_clockwise(xy):
+        bbox3d[0:4, 0:2] = xy
+        bbox3d[4:, 0:2] = xy
+    else:
+        bbox3d[0:4, 0:2] = xy[::-1, :]
+        bbox3d[4:, 0:2] = xy[::-1, :]
+    bbox3d[0:4, 2] = bbox[9]  # zmax
+    bbox3d[4:, 2] = bbox[8]  # zmin
+    return bbox3d
+
+
+def wrapper(bbox):
+    bbox3d = box_conversion(bbox)
+    bbox3d = flip_axis_to_camera(bbox3d)
+    bbox3d_flipped = np.copy(bbox3d)
+    bbox3d_flipped[0:4, :] = bbox3d[4:, :]
+    bbox3d_flipped[4:, :] = bbox3d[0:4, :]
+    return bbox3d_flipped
+
+
+def get_gt_cls(gt_boxes_dir, classname):
+    gt = {}
+    gt_boxes = np.loadtxt(os.path.join(gt_boxes_dir, '%s_gt_boxes.dat' % (classname)))
+    gt_imgids = np.loadtxt(os.path.join(gt_boxes_dir, '%s_gt_imgids.txt' % (classname)))
+    print(gt_boxes.shape)
+    print(gt_imgids.shape)
+    for i in range(len(gt_imgids)):
+        imgid = gt_imgids[i]
+        bbox = gt_boxes[i]
+        bbox3d = wrapper(bbox)
+
+        if imgid not in gt:
+            gt[imgid] = []
+        gt[imgid].append(bbox3d)
+    return gt
 
 
 def pointnet_fp_module(xyz1, xyz2, points1, points2, mlp, scope, bn=True):
