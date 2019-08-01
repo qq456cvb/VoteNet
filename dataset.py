@@ -181,6 +181,7 @@ class MyDataFlow(RNGDataFlow):
         if self.training:
             self.rng.shuffle(self.dataset.samples)
         for idx in self.dataset.samples:
+            idx = 7334
             objects = self.dataset.get_label_objects(idx)
             if not objects:
                 continue
@@ -201,13 +202,16 @@ class MyDataFlow(RNGDataFlow):
                 pc_image_coord, _ = calib.project_upright_depth_to_image(pc_upright_depth)
 
             if self.training:
-                fns = glob.glob(os.path.join(self.cache_dir, 'data%d_*.npy' % idx))
-                exists = set([int(fn.split('_')[-1].split('.')[0]) for fn in fns])
-                cands = set(range(AUGMENT_X)) - exists
-                if not cands:
+                if self.cache_dir is None:
                     augment = self.rng.randint(AUGMENT_X)
                 else:
-                    augment = list(cands)[0]
+                    fns = glob.glob(os.path.join(self.cache_dir, 'data%d_*.npy' % idx))
+                    exists = set([int(fn.split('_')[-1].split('.')[0]) for fn in fns])
+                    cands = set(range(AUGMENT_X)) - exists
+                    if not cands:
+                        augment = self.rng.randint(AUGMENT_X)
+                    else:
+                        augment = list(cands)[0]
             else:
                 augment = 0
 
@@ -259,6 +263,8 @@ class MyDataFlow(RNGDataFlow):
                     # 3D BOX: Get pts velo in 3d box
                     box3d_pts_2d, box3d_pts_3d = compute_box_3d(obj, calib)
                     box3d_pts_3d = calib.project_upright_depth_to_upright_camera(box3d_pts_3d)
+                    if np.max(box3d_pts_3d[:, 1]) - np.min(box3d_pts_3d[:, 1]) < 1e-7:   # SUNRGBD sometimes gives a degenerate bbox
+                        continue
                     _, inds = extract_pc_in_box3d(pc_in_box_fov, box3d_pts_3d)
                     # Get 3D BOX size
                     box3d_size = np.array([2 * obj.l, 2 * obj.w, 2 * obj.h])
@@ -336,7 +342,7 @@ if __name__ == '__main__':
         from viz_utils import draw_lidar, draw_gt_boxes3d
 
         median_list = []
-        dataset = MyDataFlow('/data/mysunrgbd', 'training', training=False, idx_list=list(range(1, 5051)), cache_dir=None)
+        dataset = MyDataFlow('/data/mysunrgbd', 'training', training=True, idx_list=list(range(5051, 10336)), cache_dir=None)
         dataset.reset_state()
         # print(type(dataset.input_list[0][0, 0]))
         # print(dataset.input_list[0].shape)
