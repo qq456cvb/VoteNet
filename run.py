@@ -106,9 +106,8 @@ if __name__ == '__main__':
         for img_id in gt_cls[classname]:
             if img_id not in gt_all:
                 gt_all[img_id] = []
-            if img_id == 10:
-                for box in gt_cls[classname][img_id]:
-                    gt_all[img_id].append((classname, box))
+            for box in gt_cls[classname][img_id]:
+                gt_all[img_id].append((classname, box))
                     # print(classname, box)
 
     lr_schedule = [(80, 1e-4), (120, 1e-5)]
