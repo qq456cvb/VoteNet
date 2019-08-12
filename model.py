@@ -23,6 +23,7 @@ class Model(ModelDesc):
                 tf.placeholder(tf.float32, [None, config.POINT_NUM , 3], 'points'),
                 tf.placeholder(tf.float32, [None, None, 3], 'bboxes_xyz'),
                 tf.placeholder(tf.float32, [None, None, 3], 'bboxes_lwh'),
+                tf.placeholder(tf.float32, [None, None], 'bboxes_roty'),
                 tf.placeholder(tf.int32, (None, None), 'semantic_labels_input'),
                 tf.placeholder(tf.int32, (None, None), 'heading_labels_input'),
                 tf.placeholder(tf.float32, (None, None), 'heading_residuals_input'),
@@ -30,7 +31,7 @@ class Model(ModelDesc):
                 tf.placeholder(tf.float32, (None, None, 3), 'size_residuals_input'),
                 ]
 
-    def build_graph(self, _, x, bboxes_xyz, bboxes_lwh, semantic_labels, heading_labels, heading_residuals, size_labels, size_residuals):
+    def build_graph(self, _, x, bboxes_xyz, bboxes_lwh, bboxes_roty, semantic_labels, heading_labels, heading_residuals, size_labels, size_residuals):
         l0_xyz = x
         l0_points = x
 
@@ -59,6 +60,18 @@ class Model(ModelDesc):
         votes = tf.concat([seeds_xyz, seeds_points], 2) + offset
         votes_xyz = votes[:, :, :3]
         dist2center = tf.abs(tf.expand_dims(seeds_xyz, 2) - tf.expand_dims(bboxes_xyz, 1))
+
+        def rotate_pc_along_y(pc, rot_angle):
+            batch_size = tf.shape(rot_angle)[0]
+            c = tf.cos(rot_angle)
+            s = tf.sin(rot_angle)
+            zeros = tf.zeros_like(c)
+            ones = tf.ones_like(c)
+            rotation = tf.reshape(tf.stack([c, zeros, s, zeros, ones, zeros, -s, zeros, c], -1),
+                                  tf.stack([batch_size, -1, 3, 3]))  # B * BB * 3 * 3
+            return tf.einsum('ijkl,imjl->imjk', rotation, pc)
+
+        dist2center = rotate_pc_along_y(dist2center, -bboxes_roty)  # rotate point clouds to align with bboxes
         surface_ind = tf.less(dist2center, tf.expand_dims(bboxes_lwh, 1) / 2.)  # B * N * BB * 3, bool
         surface_ind = tf.equal(tf.count_nonzero(surface_ind, -1), 3)  # B * N * BB
         surface_ind = tf.greater_equal(tf.count_nonzero(surface_ind, -1), 1)  # B * N, should be in at least one bbox

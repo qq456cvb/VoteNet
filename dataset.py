@@ -49,17 +49,6 @@ for t, idx in type2class.items():
     class_mean_size[idx] = type_mean_size[t]
 
 
-def rotate_pc_along_y(pc, rot_angle):
-    ''' Input ps is NxC points with first 3 channels as XYZ
-        z is facing forward, x is left ward, y is downward
-    '''
-    cosval = np.cos(rot_angle)
-    sinval = np.sin(rot_angle)
-    rotmat = np.array([[cosval, -sinval], [sinval, cosval]])
-    pc[:, [0, 2]] = np.dot(pc[:, [0, 2]], np.transpose(rotmat))
-    return pc
-
-
 def angle2class(angle, num_class):
     ''' Convert continuous angle to discrete class
         [optinal] also small regression number from
@@ -108,13 +97,13 @@ def get_3d_box(box_size, heading_angle, center):
     '''
     R = roty(heading_angle)
     l, w, h = box_size
-    x_corners = [l / 2, l / 2, -l / 2, -l / 2, l / 2, l / 2, -l / 2, -l / 2];
-    y_corners = [h / 2, h / 2, h / 2, h / 2, -h / 2, -h / 2, -h / 2, -h / 2];
-    z_corners = [w / 2, -w / 2, -w / 2, w / 2, w / 2, -w / 2, -w / 2, w / 2];
+    x_corners = [l / 2, l / 2, -l / 2, -l / 2, l / 2, l / 2, -l / 2, -l / 2]
+    y_corners = [h / 2, h / 2, h / 2, h / 2, -h / 2, -h / 2, -h / 2, -h / 2]
+    z_corners = [w / 2, -w / 2, -w / 2, w / 2, w / 2, -w / 2, -w / 2, w / 2]
     corners_3d = np.dot(R, np.vstack([x_corners, y_corners, z_corners]))
-    corners_3d[0, :] = corners_3d[0, :] + center[0];
-    corners_3d[1, :] = corners_3d[1, :] + center[1];
-    corners_3d[2, :] = corners_3d[2, :] + center[2];
+    corners_3d[0, :] = corners_3d[0, :] + center[0]
+    corners_3d[1, :] = corners_3d[1, :] + center[1]
+    corners_3d[2, :] = corners_3d[2, :] + center[2]
     corners_3d = np.transpose(corners_3d)
     return corners_3d
 
@@ -243,6 +232,7 @@ class MyDataFlow(RNGDataFlow):
 
                 bboxes_xyz = []
                 bboxes_lwh = []
+                bboxes_roty = []
                 semantic_labels = []
                 heading_labels = []
                 heading_residuals = []
@@ -301,6 +291,7 @@ class MyDataFlow(RNGDataFlow):
 
                     bboxes_xyz.append(box3d_center)
                     bboxes_lwh.append(box3d_size)
+                    bboxes_roty.append(obj.heading_angle)
                     semantic_labels.append(type2class[obj.classname])
                     heading_labels.append(angle_class)
                     heading_residuals.append(angle_residual / (np.pi / config.NH))
@@ -316,7 +307,7 @@ class MyDataFlow(RNGDataFlow):
                         pc_upright_camera[:, :3] = (roty(rand_roty_angle) @ pc_upright_camera[:, :3].T).T
                         pc_upright_camera[:, :3] = pc_upright_camera[:, :3] * rand_scale
 
-                    batch = [idx, pc_upright_camera[:, :3], np.array(bboxes_xyz), np.array(bboxes_lwh), np.array(semantic_labels),
+                    batch = [idx, pc_upright_camera[:, :3], np.array(bboxes_xyz), np.array(bboxes_lwh), np.asarray(bboxes_roty), np.array(semantic_labels),
                            np.array(heading_labels), np.array(heading_residuals), np.array(size_labels), np.array(size_residuals)]
                     if self.cache_dir is not None:
                         with open(os.path.join(self.cache_dir, 'data%d_%d.npy' % (idx, augment)), 'wb') as f:
