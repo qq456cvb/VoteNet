@@ -30,10 +30,13 @@ def iou_3d(bbox1, bbox2):
     :param bbox2: 8 * 3
     :return: float
     '''
+    assert bbox1[0, 1] > bbox1[4, 1] and bbox2[0, 1] > bbox2[4, 1]
     poly1_xz = Polygon(np.stack([bbox1[:4, 0], bbox1[:4, 2]], -1))
     poly2_xz = Polygon(np.stack([bbox2[:4, 0], bbox2[:4, 2]], -1))
-    iou_xz = poly1_xz.intersection(poly2_xz).area / poly1_xz.union(poly2_xz).area
-    return max(iou_xz * (min(bbox1[0, 1], bbox2[0, 1]) - max(bbox1[4, 1], bbox2[4, 1])), 0)
+    inter_area = poly1_xz.intersection(poly2_xz).area
+    inter_vol = inter_area * max(0.0, min(bbox1[0, 1], bbox2[0, 1]) - max(bbox1[4, 1], bbox2[4, 1]))
+    iou = inter_vol / (poly1_xz.area * (bbox1[0, 1] - bbox1[4, 1]) + poly2_xz.area * (bbox2[0, 1] - bbox2[4, 1]) - inter_vol)
+    return iou
 
 
 def voc_ap(rec, prec, use_07_metric=False):
