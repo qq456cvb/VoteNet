@@ -45,6 +45,10 @@ static inline float area2d(const float* bbox) {
     * sqrtf((bbox[1 * 3] - bbox[2 * 3]) * (bbox[1 * 3] - bbox[2 * 3]) + (bbox[1 * 3 + 2] - bbox[2 * 3 + 2]) * (bbox[1 * 3 + 2] - bbox[2 * 3 + 2]));
 }
 
+static inline float area3d(const float* bbox) {
+  return area2d(bbox) * (bbox[0 * 3 + 1] - bbox[4 * 3 + 1]);
+}
+
 // https://www.swtestacademy.com/intersection-convex-polygons-algorithm/
 static inline float pointInPolygon(const Point2f &p, const float *poly)
 { // poly : 8 * 3, we need the first 4
@@ -180,7 +184,7 @@ static inline float IOUGreaterThanThreshold(
 
   float intersection2d = intersection(box_i_ptr, box_j_ptr);
   float iou2d = intersection2d / (area2d(box_i_ptr) + area2d(box_j_ptr) - intersection2d);
-  float iou = MAX(MIN(box_i_ptr[1], box_j_ptr[1]) - MAX(box_i_ptr[4 * 3 + 1], box_j_ptr[4 * 3 + 1]), 0) * intersection2d;
+  float iou = MAX(MIN(box_i_ptr[1], box_j_ptr[1]) - MAX(box_i_ptr[4 * 3 + 1], box_j_ptr[4 * 3 + 1]), 0) * intersection2d / (area3d(box_i_ptr) + area3d(box_j_ptr));
   // std::cout << area2d(box_i_ptr) << ", " << area2d(box_j_ptr) << std::endl;
 //  std::cout << intersection2d << ", " << iou << std::endl;
   return iou > iou_threshold;
