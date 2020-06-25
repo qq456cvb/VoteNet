@@ -184,7 +184,8 @@ static inline float IOUGreaterThanThreshold(
 
   float intersection2d = intersection(box_i_ptr, box_j_ptr);
   float iou2d = intersection2d / (area2d(box_i_ptr) + area2d(box_j_ptr) - intersection2d);
-  float iou = MAX(MIN(box_i_ptr[1], box_j_ptr[1]) - MAX(box_i_ptr[4 * 3 + 1], box_j_ptr[4 * 3 + 1]), 0) * intersection2d / (area3d(box_i_ptr) + area3d(box_j_ptr));
+  float intersection3d = MAX(MIN(box_i_ptr[1], box_j_ptr[1]) - MAX(box_i_ptr[4 * 3 + 1], box_j_ptr[4 * 3 + 1]), 0) * intersection2d;
+  float iou = intersection3d / (area3d(box_i_ptr) + area3d(box_j_ptr) - intersection3d);
   // std::cout << area2d(box_i_ptr) << ", " << area2d(box_j_ptr) << std::endl;
 //  std::cout << intersection2d << ", " << iou << std::endl;
   return iou > iou_threshold;
