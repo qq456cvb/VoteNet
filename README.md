@@ -1,64 +1,61 @@
-# VoteNet
+# VoteNet (Unofficial TensorFlow Implementation)
 
-<!-- README refined by Cursor -->
+An unofficial TensorFlow/[Tensorpack](https://github.com/tensorpack/tensorpack) implementation of [Deep Hough Voting for 3D Object Detection in Point Clouds (ICCV 2019)](https://openaccess.thecvf.com/content_ICCV_2019/html/Qi_Deep_Hough_Voting_for_3D_Object_Detection_in_Point_Clouds_ICCV_2019_paper.html) by Qi et al., trained and evaluated on SUN RGB-D.
 
-Deep Hough Voting for 3D Object Detection in Point Clouds (https://arxiv.org/abs/1904.09664)
+For the authors' official PyTorch implementation, see [facebookresearch/votenet](https://github.com/facebookresearch/votenet).
 
 ## Overview
 
-This repository contains Python, C++, CUDA code from an older research, course, or prototype project. The README has been refreshed to make the repository easier to scan while preserving the original notes below.
+VoteNet detects 3D objects directly from raw point clouds. A PointNet++ backbone extracts seed points, each seed casts a *vote* toward the object center it (possibly) belongs to (a deep, learned analogue of the Hough transform), votes are clustered into object proposals, and each proposal predicts an oriented 3D bounding box with a class label. Final detections are obtained after 3D non-maximum suppression.
 
-## Repository Contents
+This repository implements that pipeline with:
 
-- `tf_ops/`
+- `model.py` — voting + proposal network on a PointNet++ backbone.
+- `tf_ops/` — custom TensorFlow CUDA ops: farthest-point `sampling`, ball-query `grouping`, `3d_interpolation`, and `3d_nms`.
+- `dataset.py` / `sunutils.py` — SUN RGB-D data loading and box utilities.
+- `evaluator.py` — per-class AP / mAP evaluation callback.
+- `run.py` — training entry point.
 
 ## Setup
 
-- This legacy repo does not pin a full environment. Start from the language/toolchain implied by the source files, then install missing packages as reported by the runtime.
+1. Install TensorFlow 1.x (GPU), Tensorpack, and numpy.
+2. Compile the custom TensorFlow ops, as in [PointNet++](https://github.com/charlesq34/pointnet2): run the `*_compile.sh` script inside each `tf_ops/*` folder (adjust the TensorFlow/CUDA paths for your machine).
 
-## Usage
+## Data
 
-- inspect the top-level Python entry points: `config.py`, `dataset.py`, `evaluator.py`, `model.py`, `run.py`
+Prepare the SUN RGB-D dataset following the instructions of [frustum-pointnets](https://github.com/charlesq34/frustum-pointnets/tree/master/sunrgbd); only the `extract_rgbd_data.m` step is needed.
 
-## Data and Artifacts
+## Training
 
-No new large artifact is stored in this repository. If a dataset or checkpoint is required, follow the links and notes in the original section below.
+Point `MyDataFlow` (in `run.py`) at the root folder of the generated data, then:
 
-## Status
+```bash
+python run.py
+```
 
-This is a `Batch B` cleanup pass for a legacy repository. Commands may require dependency/version adjustments on a modern machine.
+Training logs and checkpoints are managed by Tensorpack; validation mAP is computed periodically by the `Evaluator` callback.
 
-## License
+## Results
 
-No explicit license file was found in this checkout; check the original project context before reusing code.
+Partial reproduction on SUN RGB-D after 75 epochs (per-class AP):
 
-## Original Notes
+| Class | AP | Class | AP |
+| --- | --- | --- | --- |
+| bed | 0.371 | chair | 0.054 |
+| bookshelf | 0.154 | dresser | 0.035 |
+| sofa | 0.122 | toilet | 0.011 |
+| night stand | 0.007 | table | 0.003 |
+| desk | 0.002 | bathtub | 0.000 |
 
-# VoteNet
-This is an unofficial implementation of "Deep Hough Voting for 3D Object Detection in Point Clouds" (https://arxiv.org/abs/1904.09664)
+Overall mAP: **0.076** — well below the paper's reported numbers, so treat this implementation as a starting point for experimentation rather than a faithful reproduction. The official implementation linked above reproduces the paper's results.
 
-# Training
-* Prepare SUN RGB-D dataset following the instructions of https://github.com/charlesq34/frustum-pointnets/tree/master/sunrgbd, note you only need to run `extract_rgbd_data.m`
-* Compile custom Tensorflow ops as described in PointNet++
-* Pass the root folder of generated data in `MyDataFlow` and run `run.py`.
+## Reference
 
-# TODOs
-* ~~Data augmentation~~
-* ~~Test/Validation mAP~~
-* ~~Train/Validation split~~
-* ~~3D NMS~~
-
-# Results (To be updated)
-* After 75 epochs, I got the following AP:
-  - table:0.002599436474719265
-  - bed:0.3710421555617831
-  - night_stand:0.0067538466938640174
-  - bookshelf:0.15430493020623803
-  - chair:0.05431061678741693
-  - dresser:0.035260119681139616
-  - sofa:0.12197371148148911
-  - desk:0.0022836462245173833
-  - toilet:0.010896393557409
-  - bathtub:0.0
-
-  - mAP:0.075942
+```bibtex
+@inproceedings{qi2019deep,
+  title={Deep Hough Voting for 3D Object Detection in Point Clouds},
+  author={Qi, Charles R and Litany, Or and He, Kaiming and Guibas, Leonidas J},
+  booktitle={Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)},
+  year={2019}
+}
+```
